@@ -2,12 +2,10 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
-// 声明 Swift UI
 @interface AntiEditViewerController : UIViewController
 + (void)presentFrom:(UIViewController *)vc imageUrl:(NSString *)url;
 @end
 
-// 日志工具
 void writeProbeLog(NSString *format, ...) {
     @try {
         va_list args; va_start(args, format);
@@ -28,7 +26,6 @@ static UIViewController* topVC() {
     return vc;
 }
 
-// 创建一个全局的事件处理类，确保点击绝对生效
 @interface DumpHandler : NSObject
 + (instancetype)shared;
 - (void)buttonClicked:(UIButton *)sender;
@@ -38,19 +35,15 @@ static UIViewController* topVC() {
 + (instancetype)shared {
     static DumpHandler *instance = nil;
     static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        instance = [[DumpHandler alloc] init];
-    });
+    dispatch_once(&onceToken, ^{ instance = [[DumpHandler alloc] init]; });
     return instance;
 }
 - (void)buttonClicked:(UIButton *)sender {
-    writeProbeLog(@"[UI] 按钮被点击了！");
-    
     NSMutableString *dumpText = [NSMutableString string];
-    [dumpText appendString:@"=== 正在扫描当前界面的消息状态 ===\n"];
+    [dumpText appendString:@"=== 当前界面的所有变量 ===\n"];
     
     UIViewController *vc = topVC();
-    [dumpText appendFormat:@"当前控制器: %@\n", NSStringFromClass([vc class])];
+    [dumpText appendFormat:@"控制器: %@\n\n", NSStringFromClass([vc class])];
     
     unsigned int count = 0;
     Ivar *ivars = class_copyIvarList([vc class], &count);
@@ -59,42 +52,35 @@ static UIViewController* topVC() {
         const char *name = ivar_getName(ivar);
         NSString *nameStr = [NSString stringWithUTF8String:name];
         
-        if ([nameStr localizedCaseInsensitiveContainsString:@"message"] ||
-            [nameStr localizedCaseInsensitiveContainsString:@"state"] ||
-            [nameStr localizedCaseInsensitiveContainsString:@"data"] ||
-            [nameStr localizedCaseInsensitiveContainsString:@"media"]) {
-            [dumpText appendFormat:@"变量: %@\n", nameStr];
-            @try {
-                id val = [vc valueForKey:nameStr];
-                if (val) [dumpText appendFormat:@"值: %@\n\n", [val description]];
-            } @catch (NSException *e) {}
+        [dumpText appendFormat:@"变量: %@\n", nameStr];
+        @try {
+            id val = [vc valueForKey:nameStr];
+            if (val) {
+                NSString *desc = [val description];
+                if (desc.length > 150) desc = [desc substringToIndex:150];
+                [dumpText appendFormat:@"  值: %@\n\n", desc];
+            }
+        } @catch (NSException *e) {
+            [dumpText appendFormat:@"  值: (无法读取)\n\n"];
         }
     }
     free(ivars);
     
-    if (dumpText.length > 3000) {
-        dumpText = (NSMutableString *)[dumpText substringToIndex:3000];
+    if (dumpText.length > 8000) {
+        dumpText = (NSMutableString *)[dumpText substringToIndex:8000];
     }
     
+    writeProbeLog(@"[UI] 准备弹出数据，长度: %lu", (unsigned long)dumpText.length);
     [AntiEditViewerController presentFrom:vc imageUrl:dumpText];
 }
 @end
 
-// ==========================================
-// 直接 Hook 所有的 ViewController 加载
-// ==========================================
 %hook UIViewController
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     NSString *clsName = NSStringFromClass([self class]);
-    
-    // 只要类名是聊天界面，就加按钮
     if ([clsName containsString:@"ChatController"]) {
-        for (UIView *v in self.view.subviews) {
-            if (v.tag == 44444) return;
-        }
-        
-        writeProbeLog(@"[UI] 发现聊天界面 %@，注入按钮", clsName);
+        for (UIView *v in self.view.subviews) { if (v.tag == 44444) return; }
         
         UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
         btn.tag = 44444;
@@ -102,10 +88,7 @@ static UIViewController* topVC() {
         btn.backgroundColor = [UIColor redColor];
         btn.layer.cornerRadius = 30;
         [btn setTitle:@"扒库" forState:UIControlStateNormal];
-        
-        // 绑定到全局的 DumpHandler
         [btn addTarget:[DumpHandler shared] action:@selector(buttonClicked:) forControlEvents:UIControlEventTouchUpInside];
-        
         [self.view addSubview:btn];
     }
 }
