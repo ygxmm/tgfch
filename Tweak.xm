@@ -1,5 +1,6 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#import <objc/runtime.h>
 
 // ==========================================
 // 核心：安全写入日志到 App 自身的沙盒 Documents 目录
@@ -11,7 +12,6 @@ void writeProbeLog(NSString *format, ...) {
         NSString *msg = [[NSString alloc] initWithFormat:format arguments:args];
         va_end(args);
         
-        // 获取当前 App (Turrit) 沙盒的 Documents 目录
         NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
         NSString *path = [docPath stringByAppendingPathComponent:@"TurritAntiEdit.log"];
         
@@ -28,87 +28,38 @@ void writeProbeLog(NSString *format, ...) {
             [file writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
             [file closeFile];
         }
-    } @catch (NSException *e) {
-        NSLog(@"[TurritAntiEdit] 写日志失败: %@", e);
-    }
-}
-
-// ==========================================
-// 1. 探针：底层网络更新接收 (MtProtoKit)
-// ==========================================
-@interface _TtC12TelegramCoreP33_C08D30065300083FB7E5BAE4ADF7A07627MtProtoKitUpdateSinkService : NSObject
-- (void)mtProto:(id)a0 receivedMessage:(id)a1 authInfoSelector:(long long)a2 networkType:(int)a3;
-@end
-
-%hook _TtC12TelegramCoreP33_C08D30065300083FB7E5BAE4ADF7A07627MtProtoKitUpdateSinkService
-- (void)mtProto:(id)a0 receivedMessage:(id)a1 authInfoSelector:(long long)a2 networkType:(int)a3 {
-    NSString *className = NSStringFromClass([a1 class]);
-    if ([className containsString:@"Update"] || [className containsString:@"Edit"]) {
-        writeProbeLog(@"[网络层] 收到更新包: %@", className);
-    }
-    %orig;
-}
-%end
-
-// ==========================================
-// 2. 探针：消息解析入口
-// ==========================================
-@interface _TtC12TelegramCore13Serialization : NSObject
-- (id)parseMessage:(id)a0;
-@end
-@interface TelegramCore_Serialization : NSObject
-- (id)parseMessage:(id)a0;
-@end
-
-%hook _TtC12TelegramCore13Serialization
-- (id)parseMessage:(id)a0 {
-    id res = %orig;
-    NSString *className = NSStringFromClass([res class]);
-    if ([className containsString:@"Edit"]) {
-        writeProbeLog(@"[解析层-Swift] 解析出编辑包: %@", className);
-    }
-    return res;
-}
-%end
-
-%hook TelegramCore_Serialization
-- (id)parseMessage:(id)a0 {
-    id res = %orig;
-    NSString *className = NSStringFromClass([res class]);
-    if ([className containsString:@"Edit"]) {
-        writeProbeLog(@"[解析层-ObjC] 解析出编辑包: %@", className);
-    }
-    return res;
-}
-%end
-
-// ==========================================
-// 3. 探针：UI层媒体节点加载
-// ==========================================
-@interface ChatMessageInteractiveMediaNode_ChatMessageInteractiveMediaNode : NSObject
-- (void)didLoad;
-@end
-
-%hook ChatMessageInteractiveMediaNode_ChatMessageInteractiveMediaNode
-- (void)didLoad {
-    %orig;
-    @try {
-        id msg = [self valueForKey:@"message"];
-        if (msg) {
-            writeProbeLog(@"[UI层] 节点加载，包含消息对象: %@", NSStringFromClass([msg class]));
-        }
     } @catch (NSException *e) {}
 }
-%end
 
 // ==========================================
-// 4. 探针：全局检查
+// 探针：全量扫描 Turrit 真实的类名
 // ==========================================
 %ctor {
-    writeProbeLog(@"--- Tweak 成功注入启动 ---");
-    if (NSClassFromString(@"LeadAntiRevokeUpdater")) {
-        writeProbeLog(@"检测到原生 Lead 插件仍存在");
-    } else {
-        writeProbeLog(@"未检测到 Lead 插件，纯独立模式");
+    @autoreleasepool {
+        writeProbeLog(@"--- 开始扫描真实类名 ---");
+        
+        int numClasses = objc_getClassList(NULL, 0);
+        Class *classes = (Class *)malloc(sizeof(Class) * numClasses);
+        numClasses = objc_getClassList(classes, numClasses);
+        
+        int count = 0;
+        for (int i = 0; i < numClasses; i++) {
+            Class cls = classes[i];
+            const char *name = class_getName(cls);
+            if (name) {
+                NSString *clsName = [NSString stringWithUTF8String:name];
+                // 只要名字里带这些关键字的，全抓出来！
+                if ([clsName containsString:@"Serialization"] ||
+                    [clsName containsString:@"Message"] ||
+                    [clsName containsString:@"Update"] ||
+                    [clsName containsString:@"Media"]) {
+                    writeProbeLog(@"真实类名: %@", clsName);
+                    count++;
+                    if (count > 500) break; // 限制数量防崩溃
+                }
+            }
+        }
+        free(classes);
+        writeProbeLog(@"--- 扫描结束，共找到 %d 个相关类 ---", count);
     }
 }
