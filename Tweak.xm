@@ -18,16 +18,16 @@ void logPacket(NSString *text) {
     if (result) {
         NSString *desc = [result description];
         
-        // 1. 拦截撤回指令 (updateDeleteChannelMessages / updateDeleteMessages)
+        // 1. 拦截撤回指令
         if ([desc containsString:@"updateDeleteChannelMessages"] || [desc containsString:@"updateDeleteMessages"]) {
-            logPacket([NSString stringWithFormat:@"🛑 [防撤回] 拦截并丢弃数据包: %@\n\n", desc]);
-            return nil; // 丢弃这个数据包，界面不会消失！
+            logPacket([NSString stringWithFormat:@"🛑 [拦截撤回] 丢弃包: %@\n\n", [desc substringToIndex:MIN(desc.length, 200)]]);
+            // 返回一个空的 BoxedMessage 或者空的 Updates 结构（如果有默认构造函数）
+            // 由于是纯 Swift，直接返回 nil 可能报错，我们尝试返回原值，但通过下面的方法拦截
         }
         
-        // 2. 拦截编辑指令 (updateEditMessage / updateEditChannelMessage)
-        if ([desc containsString:@"updateEditMessage"] || [desc containsString:@"updateEditChannelMessage"]) {
-            logPacket([NSString stringWithFormat:@"🛑 [防编辑] 拦截并丢弃数据包: %@\n\n", desc]);
-            return nil; // 丢弃这个数据包，内容不会改变！
+        // 2. 拦截编辑指令
+        if ([desc containsString:@"updateEditChannelMessage"] || [desc containsString:@"updateEditMessage"]) {
+            logPacket([NSString stringWithFormat:@"🛑 [拦截编辑] 丢弃包: %@\n\n", [desc substringToIndex:MIN(desc.length, 200)]]);
         }
     }
     
@@ -35,7 +35,24 @@ void logPacket(NSString *text) {
 }
 %end
 
-// 注入一个悬浮按钮方便看日志
+// 核心大招：拦截底层更新分发器
+@interface TelegramCore_UpdateMessageService : NSObject
+@end
+%hook TelegramCore_UpdateMessageService
+
+// 如果存在这个方法，我们直接拦截（由于纯 Swift 没有暴露具体方法，我们动态查找）
+- (void)process:(id)arg1 {
+    NSString *desc = [arg1 description];
+    if ([desc containsString:@"updateEdit"] || [desc containsString:@"updateDelete"]) {
+        logPacket(@"[分发层] 拦截并阻止更新！");
+        return; // 阻止执行！
+    }
+    %orig;
+}
+
+%end
+
+// 注入悬浮按钮
 @interface BlockHandler : NSObject
 + (instancetype)shared;
 - (void)showLog:(UIButton *)sender;
