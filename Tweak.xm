@@ -2,33 +2,77 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
-@interface AntiEditViewerController : UIViewController
-+ (void)presentFrom:(UIViewController *)vc imageUrl:(NSString *)url;
-@end
-
-void writeProbeLog(NSString *format, ...) {
+// 获取 Turrit 沙盒的 Documents 目录并写入
+void writeToSandbox(NSString *text) {
     @try {
-        va_list args; va_start(args, format);
-        NSString *msg = [[NSString alloc] initWithFormat:format arguments:args]; va_end(args);
-        NSString *path = [[NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject] stringByAppendingPathComponent:@"TurritAntiEdit.log"];
-        NSString *line = [NSString stringWithFormat:@"[%@] %@\n", [NSDate date], msg];
+        NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+        NSString *path = [docPath stringByAppendingPathComponent:@"Turrit_Dump.txt"];
+        
         NSFileHandle *file = [NSFileHandle fileHandleForWritingAtPath:path];
-        if (!file) { [line writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil]; }
-        else { [file seekToEndOfFile]; [file writeData:[line dataUsingEncoding:NSUTF8StringEncoding]]; [file closeFile]; }
+        if (!file) {
+            [text writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        } else {
+            [file seekToEndOfFile];
+            [file writeData:[text dataUsingEncoding:NSUTF8StringEncoding]];
+            [file closeFile];
+        }
     } @catch (NSException *e) {}
 }
 
-static UIViewController* topVC() {
-    UIWindow *kw = [UIApplication sharedApplication].keyWindow;
-    if (!kw) kw = [UIApplication sharedApplication].windows.firstObject;
-    UIViewController *vc = kw.rootViewController;
-    while (vc.presentedViewController) vc = vc.presentedViewController;
-    return vc;
+// 扫雷函数：遍历所有加载的类
+void dumpClassesAndMethods() {
+    writeToSandbox(@"\n\n====== 开始扫描 Runtime 中的类 ======\n");
+    unsigned int count = 0;
+    Class *classes = objc_copyClassList(&count);
+    
+    int foundCount = 0;
+    for (unsigned int i = 0; i < count; i++) {
+        Class cls = classes[i];
+        const char *name = class_getName(cls);
+        NSString *clsName = [NSString stringWithUTF8String:name];
+        
+        // 过滤核心关键词
+        if ([clsName localizedCaseInsensitiveContainsString:@"Message"] ||
+            [clsName localizedCaseInsensitiveContainsString:@"Edit"] ||
+            [clsName localizedCaseInsensitiveContainsString:@"Media"] ||
+            [clsName localizedCaseInsensitiveContainsString:@"Postbox"] ||
+            [clsName localizedCaseInsensitiveContainsString:@"Update"]) {
+            
+            NSMutableString *classInfo = [NSMutableString string];
+            [classInfo appendFormat:@"\n[类] %@\n", clsName];
+            
+            // 扫方法
+            unsigned int methodCount = 0;
+            Method *methods = class_copyMethodList(cls, &methodCount);
+            for (unsigned int j = 0; j < methodCount; j++) {
+                SEL selector = method_getName(methods[j]);
+                NSString *methodName = NSStringFromSelector(selector);
+                
+                // 过滤关键字方法
+                if ([methodName localizedCaseInsensitiveContainsString:@"set"] ||
+                    [methodName localizedCaseInsensitiveContainsString:@"update"] ||
+                    [methodName localizedCaseInsensitiveContainsString:@"edit"] ||
+                    [methodName localizedCaseInsensitiveContainsString:@"media"] ||
+                    [methodName localizedCaseInsensitiveContainsString:@"text"] ||
+                    [methodName localizedCaseInsensitiveContainsString:@"init"]) {
+                    [classInfo appendFormat:@"  - %@\n", methodName];
+                }
+            }
+            free(methods);
+            
+            if (classInfo.length > 50) {
+                writeToSandbox(classInfo);
+                foundCount++;
+            }
+        }
+    }
+    free(classes);
+    writeToSandbox([NSString stringWithFormat:@"\n====== 扫描结束，共找到 %d 个相关类 ======\n", foundCount]);
 }
 
 @interface DumpHandler : NSObject
 + (instancetype)shared;
-- (void)buttonClicked:(UIButton *)sender;
+- (void)doDump:(UIButton *)sender;
 @end
 
 @implementation DumpHandler
@@ -38,57 +82,40 @@ static UIViewController* topVC() {
     dispatch_once(&onceToken, ^{ instance = [[DumpHandler alloc] init]; });
     return instance;
 }
-- (void)buttonClicked:(UIButton *)sender {
-    NSMutableString *dumpText = [NSMutableString string];
-    [dumpText appendString:@"=== 当前界面的所有变量 ===\n"];
+- (void)doDump:(UIButton *)sender {
+    // 重置沙盒里的文件
+    NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+    NSString *path = [docPath stringByAppendingPathComponent:@"Turrit_Dump.txt"];
+    [@"" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
     
-    UIViewController *vc = topVC();
-    [dumpText appendFormat:@"控制器: %@\n\n", NSStringFromClass([vc class])];
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        dumpClassesAndMethods();
+    });
     
-    unsigned int count = 0;
-    Ivar *ivars = class_copyIvarList([vc class], &count);
-    for (unsigned int i = 0; i < count; i++) {
-        Ivar ivar = ivars[i];
-        const char *name = ivar_getName(ivar);
-        NSString *nameStr = [NSString stringWithUTF8String:name];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"提取成功" message:@"数据已写入 Turrit 沙盒的 Documents 目录，请用 Filza 查看：\nTurrit_Dump.txt" preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"好的" style:UIAlertActionStyleDefault handler:nil]];
         
-        [dumpText appendFormat:@"变量: %@\n", nameStr];
-        @try {
-            id val = [vc valueForKey:nameStr];
-            if (val) {
-                NSString *desc = [val description];
-                if (desc.length > 150) desc = [desc substringToIndex:150];
-                [dumpText appendFormat:@"  值: %@\n\n", desc];
-            }
-        } @catch (NSException *e) {
-            [dumpText appendFormat:@"  值: (无法读取)\n\n"];
-        }
-    }
-    free(ivars);
-    
-    if (dumpText.length > 8000) {
-        dumpText = (NSMutableString *)[dumpText substringToIndex:8000];
-    }
-    
-    writeProbeLog(@"[UI] 准备弹出数据，长度: %lu", (unsigned long)dumpText.length);
-    [AntiEditViewerController presentFrom:vc imageUrl:dumpText];
+        UIViewController *topVC = [UIApplication sharedApplication].keyWindow.rootViewController;
+        while (topVC.presentedViewController) topVC = topVC.presentedViewController;
+        [topVC presentViewController:alert animated:YES completion:nil];
+    });
 }
 @end
 
 %hook UIViewController
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    NSString *clsName = NSStringFromClass([self class]);
-    if ([clsName containsString:@"ChatController"]) {
-        for (UIView *v in self.view.subviews) { if (v.tag == 44444) return; }
+    if ([NSStringFromClass([self class]) containsString:@"ChatController"]) {
+        for (UIView *v in self.view.subviews) { if (v.tag == 88888) return; }
         
         UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
-        btn.tag = 44444;
-        btn.frame = CGRectMake(20, 150, 60, 60);
-        btn.backgroundColor = [UIColor redColor];
-        btn.layer.cornerRadius = 30;
-        [btn setTitle:@"扒库" forState:UIControlStateNormal];
-        [btn addTarget:[DumpHandler shared] action:@selector(buttonClicked:) forControlEvents:UIControlEventTouchUpInside];
+        btn.tag = 88888;
+        btn.frame = CGRectMake(20, 100, 70, 70);
+        btn.backgroundColor = [UIColor systemBlueColor];
+        btn.layer.cornerRadius = 35;
+        [btn setTitle:@"提取" forState:UIControlStateNormal];
+        [btn addTarget:[DumpHandler shared] action:@selector(doDump:) forControlEvents:UIControlEventTouchUpInside];
         [self.view addSubview:btn];
     }
 }
