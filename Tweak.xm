@@ -1,12 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
-// 基于 dump 的头文件精准声明
-@interface TLParser : NSObject
-+ (id)editHistoryForKey:(id)a0;
-+ (id)editHistoryForMessageId:(id)a0;
-@end
-
+// 只需要声明我们要 Hook 的类
 @interface LeadEditHistoryViewController : UIViewController
 + (void)presentForKey:(id)a0 mediaReplaced:(BOOL)a1 from:(id)a2;
 @end
@@ -27,10 +22,13 @@ static UIViewController* topViewController() {
 
 + (void)presentForKey:(id)a0 mediaReplaced:(BOOL)a1 from:(id)a2 {
     
-    // 从 TLParser 精准获取对应的历史数据
     id history = nil;
-    if ([TLParser respondsToSelector:@selector(editHistoryForKey:)]) {
-        history = [TLParser editHistoryForKey:a0];
+    
+    // 使用运行时动态获取 TLParser 类，避免链接错误
+    Class TLParserClass = NSClassFromString(@"TLParser");
+    if (TLParserClass && [TLParserClass respondsToSelector:NSSelectorFromString(@"editHistoryForKey:")]) {
+        // 动态调用 editHistoryForKey:
+        history = [TLParserClass performSelector:NSSelectorFromString(@"editHistoryForKey:") withObject:a0];
     }
     
     // 拼装探针数据
@@ -47,7 +45,7 @@ static UIViewController* topViewController() {
         [topViewController() presentViewController:alert animated:YES completion:nil];
     });
     
-    // 绝对不执行 %orig，原生的那个“媒体已被替换”灰框将被彻底拦截！
+    // 彻底拦截原来的灰框
     return; 
 }
 
