@@ -2,6 +2,10 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
+@interface AntiEditViewerController : UIViewController
++ (void)presentFrom:(UIViewController *)vc imageUrl:(NSString *)url;
+@end
+
 void writeProbeLog(NSString *format, ...) {
     @try {
         va_list args;
@@ -17,57 +21,60 @@ void writeProbeLog(NSString *format, ...) {
     } @catch (NSException *e) {}
 }
 
-// 探针 1: 监测所有视图控制器的加载 (找 UI 切入点)
-%hook UIViewController
+// 我们直接在聊天界面控制器里下钩子！
+%hook TelegramUI_ChatControllerImpl
+
 - (void)viewDidLoad {
     %orig;
-    NSString *cls = NSStringFromClass([self class]);
-    // 只要类名带 Chat 或 Edit 或 Media，就记录下来
-    if ([cls containsString:@"Chat"] || [cls containsString:@"Edit"] || [cls containsString:@"Media"] || [cls containsString:@"Turrit"]) {
-        writeProbeLog(@"[UI] 发现类加载: %@", cls);
+    writeProbeLog(@"[UI] ChatControllerImpl viewDidLoad 触发！准备注入悬浮按钮");
+    
+    // 防止重复添加悬浮按钮
+    for (UIView *v in self.view.subviews) {
+        if (v.tag == 99999) return;
     }
+    
+    // 在屏幕右下角注入一个悬浮按钮
+    UIButton *floatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+    floatBtn.tag = 99999;
+    floatBtn.frame = CGRectMake(self.view.bounds.size.width - 80, self.view.bounds.size.height - 200, 60, 60);
+    floatBtn.backgroundColor = [UIColor colorWithRed:0.0 green:0.5 blue:1.0 alpha:0.8];
+    floatBtn.layer.cornerRadius = 30;
+    floatBtn.layer.masksToBounds = YES;
+    [floatBtn setTitle:@"探针" forState:UIControlStateNormal];
+    [floatBtn addTarget:self action:@selector(probeButtonClicked) forControlEvents:UIControlEventTouchUpInside];
+    
+    [self.view addSubview:floatBtn];
 }
-%end
 
-// 探针 2: 监测 TLParser (Lead 曾经利用的核心类)
-@interface TLParser : NSObject
-+ (id)handleResponse:(id)a0 functionID:(id)a1;
-+ (id)getMessageTextFromNode:(id)a0;
-+ (id)getDebugDumpFromNode:(id)a0;
-@end
-
-%hook TLParser
-+ (id)handleResponse:(id)a0 functionID:(id)a1 {
-    writeProbeLog(@"[TLParser] 收到网络响应! functionID: %@", a1);
-    return %orig;
-}
-+ (id)getMessageTextFromNode:(id)a0 {
-    writeProbeLog(@"[TLParser] 获取消息文本节点");
-    return %orig;
-}
-+ (id)getDebugDumpFromNode:(id)a0 {
-    writeProbeLog(@"[TLParser] 调试节点被调用");
-    return %orig;
-}
-%end
-
-// 探针 3: 网络接收底层 (MtProtoKit)
-@interface MTProtoKit_MtProto : NSObject
-- (void)setMessageService:(id)a0;
-@end
-%hook MTProtoKit_MtProto
-- (void)setMessageService:(id)a0 {
-    writeProbeLog(@"[网络] MTProto 服务注册: %@", NSStringFromClass([a0 class]));
-    %orig;
-}
-%end
-
-// 探针 4: 数据库写入 (SQLite)
-%hook NSFileManager
-- (BOOL)createFileAtPath:(NSString *)path contents:(NSData *)data attributes:(NSDictionary *)attr {
-    if ([path containsString:@"postbox"] || [path containsString:@"database"] || [path containsString:@"db"]) {
-        writeProbeLog(@"[数据库] 试图写入文件: %@", path);
+// 点击悬浮按钮时，把我们发现的内部属性全部通过 Swift 界面展示出来！
+- (void)probeButtonClicked {
+    NSMutableString *dumpText = [NSMutableString string];
+    [dumpText appendString:@"=== ChatControllerImpl 属性探针 ===\n"];
+    
+    unsigned int count = 0;
+    Ivar *ivars = class_copyIvarList([self class], &count);
+    for (unsigned int i = 0; i < count; i++) {
+        Ivar ivar = ivars[i];
+        const char *name = ivar_getName(ivar);
+        NSString *nameStr = [NSString stringWithUTF8String:name];
+        
+        // 过滤出包含 message 或 history 的属性
+        if ([nameStr containsString:@"message"] || [nameStr containsString:@"history"] || [nameStr containsString:@"state"]) {
+            [dumpText appendFormat:@"变量: %@\n", nameStr];
+            @try {
+                id val = [self valueForKey:nameStr];
+                if (val) [dumpText appendFormat:@"值: %@\n\n", val];
+            } @catch (NSException *e) {}
+        }
     }
-    return %orig;
+    free(ivars);
+    
+    if (dumpText.length > 2000) {
+        dumpText = (NSMutableString *)[dumpText substringToIndex:2000];
+    }
+    
+    // 强行调用我们之前写的 Swift 界面，展示属性
+    [AntiEditViewerController presentFrom:self imageUrl:dumpText];
 }
+
 %end
