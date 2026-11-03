@@ -2,8 +2,15 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
+// 声明我们自己的 Swift 界面
 @interface AntiEditViewerController : UIViewController
 + (void)presentFrom:(UIViewController *)vc imageUrl:(NSString *)url;
+@end
+
+// 核心修复：明确告诉编译器，它继承自 UIViewController
+@interface TelegramUI_ChatControllerImpl : UIViewController
+- (void)viewDidLoad;
+- (void)probeButtonClicked;
 @end
 
 void writeProbeLog(NSString *format, ...) {
@@ -58,7 +65,7 @@ void writeProbeLog(NSString *format, ...) {
         const char *name = ivar_getName(ivar);
         NSString *nameStr = [NSString stringWithUTF8String:name];
         
-        // 过滤出包含 message 或 history 的属性
+        // 过滤出包含 message 或 history 或 state 的属性
         if ([nameStr containsString:@"message"] || [nameStr containsString:@"history"] || [nameStr containsString:@"state"]) {
             [dumpText appendFormat:@"变量: %@\n", nameStr];
             @try {
