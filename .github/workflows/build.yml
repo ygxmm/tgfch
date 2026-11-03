@@ -1,22 +1,52 @@
-name: Build Tweak
-on: [push, workflow_dispatch]
+name: build deb
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
+
     steps:
       - uses: actions/checkout@v4
-      - name: Install Theos
+
+      - name: Setup roothide Theos
         run: |
-          sudo apt-get update
-          sudo apt-get install -y git make clang lldb libplist3
-          git clone --recursive https://github.com/theos/theos.git ~/theos
-          echo "THEOS=~/theos" >> $GITHUB_ENV
-      - name: Build
+          set -e
+          export THEOS="${{ github.workspace }}/theos"
+          git clone --recursive https://github.com/roothide/theos.git "$THEOS"
+          echo "THEOS=$THEOS" >> $GITHUB_ENV
+
+      - name: Install ldid
+        run: brew install ldid || true
+
+      - name: Setup GNU Make
         run: |
-          export PATH=~/theos/bin:$PATH
-          make package FINALPACKAGE=1
-      - name: Upload deb
+          echo "$(brew --prefix)/opt/make/libexec/gnubin" >> $GITHUB_PATH
+
+      - name: Clean packages dir
+        run: rm -rf packages && mkdir -p packages
+
+      - name: Build Roothide
+        run: |
+          set -e
+          export PATH="$THEOS/bin:$PATH"
+          make package THEOS_PACKAGE_SCHEME=roothide FINALPACKAGE=1 -j$(sysctl -n hw.ncpu)
+
+      - name: Verify packages
+        run: |
+          ls -la packages/*.deb
+
+      - name: Upload package artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: tweak-deb
-          path: packages/*.deb
+          name: tzyhb-${{ github.run_number }}
+          path: ${{ github.workspace }}/packages/*.deb
+          if-no-files-found: error
