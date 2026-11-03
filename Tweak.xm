@@ -1,11 +1,15 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
-// 存储被编辑或撤回的消息 ID
+// 核心修复：告诉编译器，这个纯 Swift 类继承自 UIView
+@interface _TtC19ChatMessageItemView19ChatMessageItemView : UIView
+@end
+
+// 存储被修改或撤回的消息 ID
 static NSMutableSet *editedMessageIds = nil;
 
 // ==========================================
-// 1. 网络层：拦截并记录 ID
+// 1. 网络层：精准捕获 ID
 // ==========================================
 %hook _TtC12TelegramCore13Serialization
 - (id)parseMessage:(id)a0 {
@@ -15,18 +19,16 @@ static NSMutableSet *editedMessageIds = nil;
             NSString *desc = [result description];
             if (!editedMessageIds) editedMessageIds = [NSMutableSet set];
             
-            // 如果是撤回或编辑指令
             if ([desc containsString:@"updateDeleteMessages"] || [desc containsString:@"updateEditMessage"] || [desc containsString:@"updateDeleteChannelMessages"] || [desc containsString:@"updateEditChannelMessage"]) {
                 
-                // 简单提取 ID 记录到集合中
-                NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"id:\\s*(\\d+)" options:0 error:nil];
+                // 抓取 id: 12345 或 messages: [123, 456]
+                NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"\\b\\d{3,10}\\b" options:0 error:nil];
                 NSArray *matches = [regex matchesInString:desc options:0 range:NSMakeRange(0, desc.length)];
                 for (NSTextCheckingResult *match in matches) {
-                    NSString *msgId = [desc substringWithRange:[match rangeAtIndex:1]];
+                    NSString *msgId = [desc substringWithRange:match.range];
                     [editedMessageIds addObject:msgId];
                 }
-                
-                return nil; // 阻断网络包，消息内容不变
+                return nil; // 丢弃包，底层数据不变
             }
         } @catch (NSException *e) {}
     }
@@ -35,17 +37,18 @@ static NSMutableSet *editedMessageIds = nil;
 %end
 
 // ==========================================
-// 2. UI层：在气泡旁边强行贴按钮
+// 2. UI 层：在气泡上方强行贴按钮（带防复用清理）
 // ==========================================
-// 注意：类名是你在 dump 里找出来的真实 Swift 类名
 %hook _TtC19ChatMessageItemView19ChatMessageItemView
 
-// 拦截视图布局阶段，这是注入 UI 最安全的时机
 - (void)layoutSubviews {
     %orig;
     
-    // 1. 尝试通过 KVC 获取这个气泡对应的消息对象
-    // Turrit 通常会有 message 或 item 属性
+    // 1. 防复用：每次布局前，先把可能残留的旧按钮删掉
+    UIView *oldBtn = [self viewWithTag:88888];
+    if (oldBtn) [oldBtn removeFromSuperview];
+    
+    // 2. 尝试拿到当前气泡绑定的消息对象
     id message = nil;
     @try {
         if ([self respondsToSelector:NSSelectorFromString(@"message")]) {
@@ -57,46 +60,39 @@ static NSMutableSet *editedMessageIds = nil;
     
     if (!message) return;
     
-    // 2. 提取消息 ID (通常是 mid 或 id)
+    // 3. 提取消息 ID
     NSString *msgId = nil;
     @try {
+        // 往往在 message.id 或 message.mid 里
         if ([message respondsToSelector:NSSelectorFromString(@"id")]) {
             msgId = [NSString stringWithFormat:@"%@", [message valueForKey:@"id"]];
+        } else if ([message respondsToSelector:NSSelectorFromString(@"mid")]) {
+            msgId = [NSString stringWithFormat:@"%@", [message valueForKey:@"mid"]];
         }
     } @catch (NSException *e) {}
     
     if (!msgId) return;
     
-    // 3. 判断这条消息是不是被修改过
+    // 4. 判断这条消息是否被拦截过
     if ([editedMessageIds containsObject:msgId]) {
-        // 找找有没有加过按钮，没有就加
-        UIView *btn = [self viewWithTag:88888];
-        if (!btn) {
-            UIButton *historyBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-            historyBtn.tag = 88888;
-            [historyBtn setTitle:@"笔" forState:UIControlStateNormal];
-            historyBtn.titleLabel.font = [UIFont systemFontOfSize:10];
-            historyBtn.backgroundColor = [UIColor systemOrangeColor];
-            historyBtn.layer.cornerRadius = 8;
-            [historyBtn addTarget:self action:@selector(showHistoryAlert) forControlEvents:UIControlEventTouchUpInside];
-            [self addSubview:historyBtn];
-            btn = historyBtn;
-        }
+        UIButton *historyBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+        historyBtn.tag = 88888;
+        [historyBtn setTitle:@"✏️" forState:UIControlStateNormal]; // 用铅笔 Emoji 更还原
+        historyBtn.titleLabel.font = [UIFont systemFontOfSize:10];
+        historyBtn.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5];
+        historyBtn.layer.cornerRadius = 10;
+        [historyBtn addTarget:self action:@selector(showHistoryAlert) forControlEvents:UIControlEventTouchUpInside];
         
-        // 强行把它放在右上角 (根据气泡边界计算)
-        btn.frame = CGRectMake(self.bounds.size.width - 20, -5, 20, 20);
-        [self bringSubviewToFront:btn];
-        
-    } else {
-        // 如果未被修改，确保按钮不显示
-        UIView *btn = [self viewWithTag:88888];
-        if (btn) [btn removeFromSuperview];
+        // 强行贴在气泡右上角
+        historyBtn.frame = CGRectMake(self.bounds.size.width - 25, 5, 20, 20);
+        [self addSubview:historyBtn];
+        [self bringSubviewToFront:historyBtn];
     }
 }
 
 - (void)showHistoryAlert {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"编辑记录" message:@"对方修改了这条消息，但已被拦截，保留了原文。" preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"拦截记录" message:@"对方试图修改或撤回这条消息，已被拦截！原内容已保留。" preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"知道了" style:UIAlertActionStyleDefault handler:nil]];
     
     UIWindow *window = [UIApplication sharedApplication].keyWindow;
     if (!window) window = [UIApplication sharedApplication].windows.firstObject;
