@@ -1,56 +1,108 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
-// 声明我们要 Hook 的类
+// ==========================================
+// 核心：安全写入日志到 /var/mobile/Documents/
+// ==========================================
+void writeProbeLog(NSString *format, ...) {
+    va_list args;
+    va_start(args, format);
+    NSString *msg = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+    
+    NSString *path = @"/var/mobile/Documents/TurritAntiEdit.log";
+    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+    [formatter setDateFormat:@"HH:mm:ss"];
+    NSString *timeStr = [formatter stringFromDate:[NSDate date]];
+    NSString *line = [NSString stringWithFormat:@"[%@] %@\n", timeStr, msg];
+    
+    NSFileHandle *file = [NSFileHandle fileHandleForWritingAtPath:path];
+    if (!file) {
+        [line writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    } else {
+        [file seekToEndOfFile];
+        [file writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+        [file closeFile];
+    }
+}
+
+// ==========================================
+// 1. 探针：底层网络更新接收 (MtProtoKit)
+// ==========================================
+@interface _TtC12TelegramCoreP33_C08D30065300083FB7E5BAE4ADF7A07627MtProtoKitUpdateSinkService : NSObject
+- (void)mtProto:(id)a0 receivedMessage:(id)a1 authInfoSelector:(long long)a2 networkType:(int)a3;
+@end
+
+%hook _TtC12TelegramCoreP33_C08D30065300083FB7E5BAE4ADF7A07627MtProtoKitUpdateSinkService
+- (void)mtProto:(id)a0 receivedMessage:(id)a1 authInfoSelector:(long long)a2 networkType:(int)a3 {
+    NSString *className = NSStringFromClass([a1 class]);
+    if ([className containsString:@"Update"] || [className containsString:@"Edit"]) {
+        writeProbeLog(@"[网络层] 收到更新包: %@", className);
+    }
+    %orig;
+}
+%end
+
+// ==========================================
+// 2. 探针：消息解析入口 (带真实 Swift 名字和 ObjC 名字都试)
+// ==========================================
+@interface _TtC12TelegramCore13Serialization : NSObject
+- (id)parseMessage:(id)a0;
+@end
 @interface TelegramCore_Serialization : NSObject
 - (id)parseMessage:(id)a0;
 @end
 
-static UIViewController* topViewController() {
-    UIWindow *keyWindow = nil;
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    keyWindow = [UIApplication sharedApplication].keyWindow;
-    if (!keyWindow) keyWindow = [UIApplication sharedApplication].windows.firstObject;
-#pragma clang diagnostic pop
-    UIViewController *rootVC = keyWindow.rootViewController;
-    while (rootVC.presentedViewController) rootVC = rootVC.presentedViewController;
-    return rootVC;
-}
-
-// 因为 Objective-C 中带点号的类名，在 Theos 中通常用下划线替换
-%hook TelegramCore_Serialization
-
+%hook _TtC12TelegramCore13Serialization
 - (id)parseMessage:(id)a0 {
-    // 调用原方法，让 Turrit 自己解析出网络包对象
-    id result = %orig;
-    
-    if (result) {
-        // 获取解析后的类名，比如 Cons_updateEditMessage
-        NSString *className = NSStringFromClass([result class]);
-        
-        // 如果类名包含 Edit 或者 Update，说明可能是编辑消息
-        if ([className containsString:@"Edit"] || [className containsString:@"Update"]) {
-            NSLog(@"[TurritAntiEdit] 抓包成功！解析结果类名: %@", className);
-            
-            // 为了防止刷屏，只有看到 Edit 相关的才弹窗
-            if ([className containsString:@"Edit"]) {
-                NSString *msg = [NSString stringWithFormat:@"拦截到网络包: %@\n\n内容: %@", className, result];
-                
-                if (msg.length > 1000) {
-                    msg = [msg substringToIndex:1000];
-                }
-                
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"网络层探针(Edit)" message:msg preferredStyle:UIAlertControllerStyleAlert];
-                    [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
-                    [topViewController() presentViewController:alert animated:YES completion:nil];
-                });
-            }
-        }
+    id res = %orig;
+    NSString *className = NSStringFromClass([res class]);
+    if ([className containsString:@"Edit"]) {
+        writeProbeLog(@"[解析层-Swift] 解析出编辑包: %@", className);
     }
-    
-    return result;
+    return res;
 }
+%end
 
+%hook TelegramCore_Serialization
+- (id)parseMessage:(id)a0 {
+    id res = %orig;
+    NSString *className = NSStringFromClass([res class]);
+    if ([className containsString:@"Edit"]) {
+        writeProbeLog(@"[解析层-ObjC] 解析出编辑包: %@", className);
+    }
+    return res;
+}
+%end
+
+// ==========================================
+// 3. 探针：UI层媒体节点加载
+// ==========================================
+@interface ChatMessageInteractiveMediaNode_ChatMessageInteractiveMediaNode : NSObject
+- (void)didLoad;
+@end
+
+%hook ChatMessageInteractiveMediaNode_ChatMessageInteractiveMediaNode
+- (void)didLoad {
+    %orig;
+    @try {
+        id msg = [self valueForKey:@"message"];
+        if (msg) {
+            writeProbeLog(@"[UI层] 节点加载，包含消息对象: %@", NSStringFromClass([msg class]));
+        }
+    } @catch (NSException *e) {}
+}
+%end
+
+// ==========================================
+// 4. 探针：全局检查 Lead 是否存在
+// ==========================================
+%ctor {
+    writeProbeLog(@"--- Tweak 成功注入启动 ---");
+    if (NSClassFromString(@"LeadAntiRevokeUpdater")) {
+        writeProbeLog(@"检测到原生 Lead 插件仍存在");
+    } else {
+        writeProbeLog(@"未检测到 Lead 插件，纯独立模式");
+    }
+}
 %end
