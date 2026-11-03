@@ -1,11 +1,31 @@
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
+
+// ==========================================
+// 0. 声明缺失的类和方法，防止编译报错
+// ==========================================
+@interface TGMessage : NSObject
+@property (retain, nonatomic) NSArray *mediaAttachments;
+@property (copy, nonatomic) NSString *text;
+@property (nonatomic) double editDate;
+@property (nonatomic) BOOL isEdited;
+@end
+
+@interface TLParser : NSObject
++ (id)editHistoryForKey:(id)a0;
++ (id)editHistoryForMessageId:(id)a0;
+@end
+
+@interface LeadEditHistoryViewController : UIViewController
++ (void)presentForKey:(id)a0 mediaReplaced:(BOOL)a1 from:(id)a2;
+@end
+
 
 // ==========================================
 // 1. 拦截消息本身的修改（保底防线）
 // ==========================================
 %hook TGMessage
 
-// 拦截修改图片/媒体
 - (void)setMediaAttachments:(NSArray *)mediaAttachments {
     if (self.mediaAttachments != nil && self.mediaAttachments.count > 0) {
         if (mediaAttachments != nil && mediaAttachments.count > 0) {
@@ -16,7 +36,6 @@
     %orig(mediaAttachments);
 }
 
-// 拦截修改文本
 - (void)setText:(NSString *)text {
     if (self.mediaAttachments != nil && self.mediaAttachments.count > 0) {
         if (text != nil && ![self.text isEqualToString:text]) {
@@ -31,7 +50,6 @@
     %orig(text);
 }
 
-// 拦截“已编辑”时间戳（防止出现“已编辑”小字）
 - (void)setEditDate:(double)editDate {
     if (self.editDate == 0) {
         return; 
@@ -39,7 +57,6 @@
     %orig(editDate);
 }
 
-// 拦截“已编辑”布尔标记
 - (void)setIsEdited:(BOOL)isEdited {
     if (isEdited == YES) {
         return;
@@ -51,14 +68,13 @@
 
 
 // ==========================================
-// 2. 拦截“编辑记录”面板（防偷窥原话）
+// 2. 拦截“编辑记录”面板数据
 // ==========================================
 %hook TLParser
 
-// 拦截获取编辑历史记录的方法
 + (id)editHistoryForKey:(id)a0 {
     NSLog(@"[TurritAntiEdit] 拦截了查看编辑历史(Key)！");
-    return nil; // 返回 nil，面板里没数据
+    return nil; 
 }
 
 + (id)editHistoryForMessageId:(id)a0 {
@@ -74,10 +90,9 @@
 // ==========================================
 %hook LeadEditHistoryViewController
 
-// 当试图弹出这个面板时，直接拦截
 + (void)presentForKey:(id)a0 mediaReplaced:(BOOL)a1 from:(id)a2 {
     NSLog(@"[TurritAntiEdit] 拦截了编辑记录弹窗！");
-    // 我们不调用 %orig，直接空掉它，这样就不会弹出来了
+    // 空实现，不弹出面板
 }
 
 %end
