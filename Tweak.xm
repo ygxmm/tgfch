@@ -44,7 +44,7 @@ void writeProbeLog(NSString *format, ...) {
 %end
 
 // ==========================================
-// 2. 探针：消息解析入口 (带真实 Swift 名字和 ObjC 名字都试)
+// 2. 探针：消息解析入口 (带真实 Swift 名字)
 // ==========================================
 @interface _TtC12TelegramCore13Serialization : NSObject
 - (id)parseMessage:(id)a0;
@@ -95,7 +95,7 @@ void writeProbeLog(NSString *format, ...) {
 %end
 
 // ==========================================
-// 4. 探针：全局检查 Lead 是否存在
+// 4. 探针：全局检查 (注意这里不需要 %end)
 // ==========================================
 %ctor {
     writeProbeLog(@"--- Tweak 成功注入启动 ---");
@@ -105,4 +105,3 @@ void writeProbeLog(NSString *format, ...) {
         writeProbeLog(@"未检测到 Lead 插件，纯独立模式");
     }
 }
-%end
