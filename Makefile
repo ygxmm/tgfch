@@ -5,7 +5,7 @@ INSTALL_TARGET_PROCESSES = Turrit
 include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = TurritAntiEdit
-TurritAntiEdit_FILES = Tweak.xm AntiEditView.swift
+TurritAntiEdit_FILES = Tweak.xm SwiftNodeProbe.swift
 TurritAntiEdit_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
 TurritAntiEdit_SWIFTFLAGS = -ISwiftRuntimeHeaders
 TurritAntiEdit_FRAMEWORKS = UIKit Foundation
