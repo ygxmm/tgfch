@@ -1,8 +1,6 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
-#import <objc/runtime.h>
 
-// 声明我们在 Swift 中写的探针类
 @interface SwiftNodeProbe : NSObject
 + (void)probeCurrentView:(UIView *)view;
 @end
@@ -12,7 +10,6 @@ static UIButton *floatBtn = nil;
 %hook UIViewController
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    
     if (floatBtn) return;
     
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -27,7 +24,6 @@ static UIButton *floatBtn = nil;
         floatBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
         
         [floatBtn addAction:[UIAction actionWithHandler:^(__kindof UIAction * _Nonnull action) {
-            // 把当前视图传给 Swift 探针处理
             [SwiftNodeProbe probeCurrentView:window.rootViewController.view];
         }] forControlEvents:UIControlEventTouchUpInside];
         
