@@ -2,99 +2,66 @@
 #import <UIKit/UIKit.h>
 
 // 写日志到沙盒
-void logToSandbox(NSString *text) {
+void logPacket(NSString *text) {
     NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
-    NSString *path = [docPath stringByAppendingPathComponent:@"Turrit_Capture.txt"];
+    NSString *path = [docPath stringByAppendingPathComponent:@"Turrit_Packets.txt"];
     NSFileHandle *file = [NSFileHandle fileHandleForWritingAtPath:path];
     if (!file) { [text writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil]; }
     else { [file seekToEndOfFile]; [file writeData:[text dataUsingEncoding:NSUTF8StringEncoding]]; [file closeFile]; }
 }
 
-// ==========================================
-// 1. 拦截 NSData 写入（抓取新图缓存）
-// ==========================================
-%hook NSData
-- (BOOL)writeToFile:(NSString *)path atomically:(BOOL)useAuxiliaryFile {
-    // 如果写入的数据很大（超过 50KB），大概率是图片或视频
-    if (self.length > 50000) {
-        // 如果路径里包含 Cache 或 Media
-        if ([path containsString:@"Cache"] || [path containsString:@"Media"] || [path containsString:@"Telegram"]) {
-            logToSandbox([NSString stringWithFormat:@"\n[写入大文件] %@\n大小: %lu 字节\n", path, (unsigned long)self.length]);
+// 1. 拦截底层网络序列化解析器 (这是所有消息进手机的第一站)
+%hook _TtC12TelegramCore13Serialization
+- (id)parseMessage:(id)a0 {
+    id result = %orig;
+    if (result) {
+        NSString *clsName = NSStringFromClass([result class]);
+        // 记录所有收到的包
+        logPacket([NSString stringWithFormat:@"[收到数据包] %@\n", clsName]);
+        
+        // 如果包名带 Edit 或 Update，特殊标记
+        if ([clsName containsString:@"Edit"] || [clsName containsString:@"Update"]) {
+            logPacket([NSString stringWithFormat:@"  ==> 重点可疑包: %@\n\n", result]);
         }
     }
-    return %orig;
+    return result;
 }
 %end
 
-// ==========================================
-// 2. 拦截 UIImage 生成（抓取内存中的图片）
-// ==========================================
-%hook UIImage
-+ (UIImage *)imageWithContentsOfFile:(NSString *)path {
-    UIImage *img = %orig;
-    if (img) {
-        logToSandbox([NSString stringWithFormat:@"[读取本地图片] %@\n", path]);
+// 2. 拦截另一个可能的 Swift 网络接收入口
+%hook _TtC12TelegramCoreP33_C08D30065300083FB7E5BAE4ADF7A07627MtProtoKitUpdateSinkService
+- (void)mtProto:(id)a0 receivedMessage:(id)a1 authInfoSelector:(long long)a2 networkType:(int)a3 {
+    if (a1) {
+        NSString *clsName = NSStringFromClass([a1 class]);
+        logPacket([NSString stringWithFormat:@"[底层网络] 收到消息: %@\n", clsName]);
     }
-    return img;
-}
-
-+ (UIImage *)imageWithData:(NSData *)data {
-    UIImage *img = %orig;
-    if (img && data.length > 50000) {
-        logToSandbox([NSString stringWithFormat:@"[从内存生成大图] 大小: %lu\n", (unsigned long)data.length]);
-    }
-    return img;
+    %orig;
 }
 %end
 
-// ==========================================
-// 3. 在 UI 界面加一个看日志的按钮
-// ==========================================
-@interface CaptureHandler : NSObject
-+ (instancetype)shared;
-- (void)showLog:(UIButton *)sender;
-@end
-
-@implementation CaptureHandler
-+ (instancetype)shared {
-    static CaptureHandler *instance = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{ instance = [[CaptureHandler alloc] init]; });
-    return instance;
-}
-- (void)showLog:(UIButton *)sender {
-    NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
-    NSString *path = [docPath stringByAppendingPathComponent:@"Turrit_Capture.txt"];
-    NSString *content = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
-    if (!content || content.length == 0) content = @"还没有抓到任何数据，请让对方发张图试试。";
-    
-    if (content.length > 1500) content = [content substringFromIndex:content.length - 1500];
-    
-    dispatch_async(dispatch_get_main_queue(), ^{
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"抓包结果(最新)" message:content preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
-        
-        UIViewController *topVC = [UIApplication sharedApplication].keyWindow.rootViewController;
-        while (topVC.presentedViewController) topVC = topVC.presentedViewController;
-        [topVC presentViewController:alert animated:YES completion:nil];
-    });
-}
-@end
-
+// 3. 拦截 Controller，确保你点击时能看到文件写在哪了
 %hook UIViewController
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     if ([NSStringFromClass([self class]) containsString:@"ChatController"]) {
-        for (UIView *v in self.view.subviews) { if (v.tag == 55555) return; }
+        for (UIView *v in self.view.subviews) { if (v.tag == 44444) return; }
         
         UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
-        btn.tag = 55555;
-        btn.frame = CGRectMake(20, 250, 60, 60);
-        btn.backgroundColor = [UIColor redColor];
+        btn.tag = 44444;
+        btn.frame = CGRectMake(20, 100, 60, 60);
+        btn.backgroundColor = [UIColor systemRedColor];
         btn.layer.cornerRadius = 30;
-        [btn setTitle:@"抓图" forState:UIControlStateNormal];
-        [btn addTarget:[CaptureHandler shared] action:@selector(showLog:) forControlEvents:UIControlEventTouchUpInside];
+        [btn setTitle:@"提示" forState:UIControlStateNormal];
+        [btn addTarget:self action:@selector(showPacketTip) forControlEvents:UIControlEventTouchUpInside];
         [self.view addSubview:btn];
     }
+}
+
+- (void)showPacketTip {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"抓包运行中" message:@"请去 Turrit 的 Documents 目录查看 Turrit_Packets.txt 文件。" preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+    });
 }
 %end
