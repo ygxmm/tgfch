@@ -1,34 +1,64 @@
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
 
-// 声明类和方法，防止编译报错
+// 声明缺失的类和属性
 @interface TGMessage : NSObject
+@property (nonatomic) int mid;
 @property (retain, nonatomic) NSArray *mediaAttachments;
 @end
 
+@interface LeadEditHistoryViewController : UIViewController
++ (void)presentForKey:(id)a0 mediaReplaced:(BOOL)a1 from:(id)a2;
+@end
+
+// 全局字典，用来按消息 ID 保存旧图片
+static NSMutableDictionary *oldMediaStore = nil;
+
 %hook TGMessage
 
-// 精准拦截图片和视频的修改
 - (void)setMediaAttachments:(NSArray *)mediaAttachments {
-    // 1. 如果当前消息原本就有媒体（说明原来发了图/视频）
     if (self.mediaAttachments != nil && self.mediaAttachments.count > 0) {
-        
-        // 2. 并且对方企图塞入新的媒体（说明是修改操作）
         if (mediaAttachments != nil && mediaAttachments.count > 0) {
             
-            // 3. 获取新媒体的类名，确认是图片还是视频
+            id oldMedia = [self.mediaAttachments firstObject];
             id newMedia = [mediaAttachments firstObject];
-            NSString *className = NSStringFromClass([newMedia class]);
+            NSString *oldClass = NSStringFromClass([oldMedia class]);
+            NSString *newClass = NSStringFromClass([newMedia class]);
             
-            // 只要类名包含 Image 或 Video（涵盖 TGImageMediaAttachment 等）
-            if ([className containsString:@"Image"] || [className containsString:@"Video"]) {
-                NSLog(@"[TurritAntiEdit] 🛑 成功拦截媒体修改！类型: %@", className);
-                return; // 直接 return，拒绝更新，保留原来的图片/视频
+            if ([newClass containsString:@"Image"] || [newClass containsString:@"Video"]) {
+                NSLog(@"[TurritAntiEdit] 🛑 成功拦截媒体修改！原类型: %@, 新类型: %@", oldClass, newClass);
+                
+                // 把旧媒体对象存下来，键值为消息的 mid
+                if (!oldMediaStore) {
+                    oldMediaStore = [NSMutableDictionary dictionary];
+                }
+                oldMediaStore[@(self.mid)] = self.mediaAttachments;
+                
+                return; // 拒绝更新
             }
         }
     }
-    
-    // 其他情况（比如正常发新图、发新视频），放行
     %orig(mediaAttachments);
+}
+
+%end
+
+// 当用户试图查看编辑记录时：
+%hook LeadEditHistoryViewController
+
++ (void)presentForKey:(id)a0 mediaReplaced:(BOOL)a1 from:(id)a2 {
+    // 如果我们有拦截过这张图，且它试图弹窗
+    // 这里我们让它正常弹窗（你可以看到“媒体已被替换”），但在终端打印出旧图信息
+    // 因为纯 ObjC 替换 SwiftUI 界面非常容易导致崩溃
+    
+    NSLog(@"[TurritAntiEdit] 编辑记录被打开，mediaReplaced=%d, key=%@", a1, a0);
+    
+    if (a1 == YES) {
+        // 你可以在这里发一个本地通知，或者打印日志，证明我们确实保留了旧图
+        NSLog(@"[TurritAntiEdit] 我们知道旧图，但这里为了稳定性不作视图替换");
+    }
+    
+    %orig(a0, a1, a2);
 }
 
 %end
