@@ -2,25 +2,17 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
-// 声明我们自己的 Swift 界面
+// 声明 Swift UI
 @interface AntiEditViewerController : UIViewController
 + (void)presentFrom:(UIViewController *)vc imageUrl:(NSString *)url;
 @end
 
-// 核心修复：明确告诉编译器，它继承自 UIViewController
-@interface TelegramUI_ChatControllerImpl : UIViewController
-- (void)viewDidLoad;
-- (void)probeButtonClicked;
-@end
-
+// 日志工具
 void writeProbeLog(NSString *format, ...) {
     @try {
-        va_list args;
-        va_start(args, format);
-        NSString *msg = [[NSString alloc] initWithFormat:format arguments:args];
-        va_end(args);
-        NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
-        NSString *path = [docPath stringByAppendingPathComponent:@"TurritAntiEdit.log"];
+        va_list args; va_start(args, format);
+        NSString *msg = [[NSString alloc] initWithFormat:format arguments:args]; va_end(args);
+        NSString *path = [[NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject] stringByAppendingPathComponent:@"TurritAntiEdit.log"];
         NSString *line = [NSString stringWithFormat:@"[%@] %@\n", [NSDate date], msg];
         NSFileHandle *file = [NSFileHandle fileHandleForWritingAtPath:path];
         if (!file) { [line writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil]; }
@@ -28,60 +20,93 @@ void writeProbeLog(NSString *format, ...) {
     } @catch (NSException *e) {}
 }
 
-// 我们直接在聊天界面控制器里下钩子！
-%hook TelegramUI_ChatControllerImpl
-
-- (void)viewDidLoad {
-    %orig;
-    writeProbeLog(@"[UI] ChatControllerImpl viewDidLoad 触发！准备注入悬浮按钮");
-    
-    // 防止重复添加悬浮按钮
-    for (UIView *v in self.view.subviews) {
-        if (v.tag == 99999) return;
-    }
-    
-    // 在屏幕右下角注入一个悬浮按钮
-    UIButton *floatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    floatBtn.tag = 99999;
-    floatBtn.frame = CGRectMake(self.view.bounds.size.width - 80, self.view.bounds.size.height - 200, 60, 60);
-    floatBtn.backgroundColor = [UIColor colorWithRed:0.0 green:0.5 blue:1.0 alpha:0.8];
-    floatBtn.layer.cornerRadius = 30;
-    floatBtn.layer.masksToBounds = YES;
-    [floatBtn setTitle:@"探针" forState:UIControlStateNormal];
-    [floatBtn addTarget:self action:@selector(probeButtonClicked) forControlEvents:UIControlEventTouchUpInside];
-    
-    [self.view addSubview:floatBtn];
+static UIViewController* topVC() {
+    UIWindow *kw = [UIApplication sharedApplication].keyWindow;
+    if (!kw) kw = [UIApplication sharedApplication].windows.firstObject;
+    UIViewController *vc = kw.rootViewController;
+    while (vc.presentedViewController) vc = vc.presentedViewController;
+    return vc;
 }
 
-// 点击悬浮按钮时，把我们发现的内部属性全部通过 Swift 界面展示出来！
-- (void)probeButtonClicked {
-    NSMutableString *dumpText = [NSMutableString string];
-    [dumpText appendString:@"=== ChatControllerImpl 属性探针 ===\n"];
-    
-    unsigned int count = 0;
-    Ivar *ivars = class_copyIvarList([self class], &count);
-    for (unsigned int i = 0; i < count; i++) {
-        Ivar ivar = ivars[i];
-        const char *name = ivar_getName(ivar);
-        NSString *nameStr = [NSString stringWithUTF8String:name];
-        
-        // 过滤出包含 message 或 history 或 state 的属性
-        if ([nameStr containsString:@"message"] || [nameStr containsString:@"history"] || [nameStr containsString:@"state"]) {
-            [dumpText appendFormat:@"变量: %@\n", nameStr];
-            @try {
-                id val = [self valueForKey:nameStr];
-                if (val) [dumpText appendFormat:@"值: %@\n\n", val];
-            } @catch (NSException *e) {}
+// ==========================================
+// 1. 暴力 Hook 系统级 NSData 写入
+// ==========================================
+%hook NSData
+- (BOOL)writeToFile:(NSString *)path atomically:(BOOL)useAuxiliaryFile {
+    // 只要路径里包含这几样，大概率就是缓存或者数据库
+    if ([path containsString:@"Telegram"] || [path containsString:@"Turrit"] || [path containsString:@"Media"] || [path containsString:@"Cache"]) {
+        // 如果包含图片后缀，说明正在存图！
+        if ([path containsString:@".jpg"] || [path containsString:@".png"] || [path containsString:@"media"]) {
+            writeProbeLog(@"[文件写入] 发现图片/媒体数据写入: %@", path);
         }
     }
-    free(ivars);
+    return %orig;
+}
+%end
+
+// ==========================================
+// 2. 暴力 Hook 窗口，把按钮贴在最上层
+// ==========================================
+%hook UIWindow
+- (void)makeKeyAndVisible {
+    %orig;
     
-    if (dumpText.length > 2000) {
-        dumpText = (NSMutableString *)[dumpText substringToIndex:2000];
+    // 延迟 2 秒注入，等 UI 加载完
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        // 防止重复添加
+        for (UIView *v in self.subviews) {
+            if (v.tag == 55555) return;
+        }
+        
+        UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
+        btn.tag = 55555;
+        btn.frame = CGRectMake(20, 150, 60, 60);
+        btn.backgroundColor = [UIColor purpleColor];
+        btn.layer.cornerRadius = 30;
+        [btn setTitle:@"扒库" forState:UIControlStateNormal];
+        [btn addTarget:self action:@selector(dumpAllData) forControlEvents:UIControlEventTouchUpInside];
+        
+        [self addSubview:btn];
+        writeProbeLog(@"[UI] 悬浮按钮成功注入到 UIWindow！");
+    });
+}
+
+- (void)dumpAllData {
+    NSMutableString *dumpText = [NSMutableString string];
+    [dumpText appendString:@"=== 正在扫描当前界面的消息状态 ===\n"];
+    
+    UIViewController *vc = topVC();
+    [dumpText appendFormat:@"当前控制器: %@\n", NSStringFromClass([vc class])];
+    
+    // 如果是 TelegramUI_ChatControllerImpl
+    if ([NSStringFromClass([vc class]) containsString:@"ChatController"]) {
+        unsigned int count = 0;
+        Ivar *ivars = class_copyIvarList([vc class], &count);
+        for (unsigned int i = 0; i < count; i++) {
+            Ivar ivar = ivars[i];
+            const char *name = ivar_getName(ivar);
+            NSString *nameStr = [NSString stringWithUTF8String:name];
+            
+            if ([nameStr localizedCaseInsensitiveContainsString:@"message"] ||
+                [nameStr localizedCaseInsensitiveContainsString:@"state"] ||
+                [nameStr localizedCaseInsensitiveContainsString:@"data"]) {
+                [dumpText appendFormat:@"变量: %@\n", nameStr];
+                @try {
+                    id val = [vc valueForKey:nameStr];
+                    if (val) [dumpText appendFormat:@"值: %@\n\n", [val description]];
+                } @catch (NSException *e) {}
+            }
+        }
+        free(ivars);
+    } else {
+        [dumpText appendString:@"当前没在聊天界面，或者类名不对。"];
     }
     
-    // 强行调用我们之前写的 Swift 界面，展示属性
-    [AntiEditViewerController presentFrom:self imageUrl:dumpText];
+    if (dumpText.length > 3000) {
+        dumpText = (NSMutableString *)[dumpText substringToIndex:3000];
+    }
+    
+    [AntiEditViewerController presentFrom:vc imageUrl:dumpText];
 }
 
 %end
