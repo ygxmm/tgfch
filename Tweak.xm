@@ -1,9 +1,21 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
+// ==========================================
+// 补齐头文件声明，让编译器闭嘴
+// ==========================================
 @interface TGMessage : NSObject
 @property (nonatomic) int mid;
 @property (retain, nonatomic) NSArray *mediaAttachments;
+@end
+
+@interface TGImageMediaAttachment : NSObject
+@property (nonatomic) long long imageId;
+@property (retain, nonatomic) id imageInfo;
+@end
+
+@interface TGImageInfo : NSObject
+- (id)allSizes;
 @end
 
 static UIViewController* topViewController() {
@@ -30,13 +42,17 @@ static UIViewController* topViewController() {
                 
                 // 强行提取内部信息
                 NSString *mediaDesc = [oldMedia description];
-                id imageInfo = nil;
+                TGImageInfo *imageInfo = nil;
                 NSArray *sizes = nil;
                 long long imgId = 0;
                 
                 @try {
-                    imgId = [[oldMedia valueForKey:@"imageId"] longLongValue];
-                    imageInfo = [oldMedia valueForKey:@"imageInfo"];
+                    if ([oldMedia respondsToSelector:NSSelectorFromString(@"imageId")]) {
+                        imgId = [[oldMedia valueForKey:@"imageId"] longLongValue];
+                    }
+                    if ([oldMedia respondsToSelector:NSSelectorFromString(@"imageInfo")]) {
+                        imageInfo = [oldMedia valueForKey:@"imageInfo"];
+                    }
                     if ([imageInfo respondsToSelector:@selector(allSizes)]) {
                         sizes = [imageInfo allSizes];
                     }
@@ -45,9 +61,9 @@ static UIViewController* topViewController() {
                 NSString *probeMsg = [NSString stringWithFormat:@"imageId: %lld\n\nallSizes: %@\n\nimageInfo: %@\n\n旧对象: %@", 
                                       imgId, sizes, imageInfo, mediaDesc];
                 
-                // 字数太多只取前800个字符
-                if (probeMsg.length > 800) {
-                    probeMsg = [probeMsg substringToIndex:800];
+                // 字数太多只取前1000个字符，防止弹窗崩溃
+                if (probeMsg.length > 1000) {
+                    probeMsg = [probeMsg substringToIndex:1000];
                 }
 
                 dispatch_async(dispatch_get_main_queue(), ^{
