@@ -6,42 +6,39 @@
 @property (retain, nonatomic) NSArray *mediaAttachments;
 @end
 
-@interface TGImageMediaAttachment : NSObject
-@property (retain, nonatomic) id imageInfo;
-@end
-
-@interface TGImageInfo : NSObject
-- (id)closestImageUrlWithSize:(CGSize)a0 resultingSize:(CGSize *)a1;
-@end
-
 @interface LeadEditHistoryViewController : UIViewController
 + (void)presentForKey:(id)a0 mediaReplaced:(BOOL)a1 from:(id)a2;
 @end
 
 static NSMutableDictionary *savedOldMediaDict = nil;
 
-@interface AntiEditImageViewerController : UIViewController
-@property (nonatomic, strong) UIImage *image;
-@end
-
-@implementation AntiEditImageViewerController
-- (void)viewDidLoad {
-    [super viewDidLoad];
-    self.view.backgroundColor = [UIColor blackColor];
+// ==========================================
+// 核心：写日志到沙盒的辅助函数
+// ==========================================
+void writeDebugLog(NSString *format, ...) {
+    va_list args;
+    va_start(args, format);
+    NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
     
-    UIImageView *imageView = [[UIImageView alloc] initWithImage:self.image];
-    imageView.contentMode = UIViewContentModeScaleAspectFit;
-    imageView.frame = self.view.bounds;
-    imageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    [self.view addSubview:imageView];
+    // 获取 Turrit 沙盒的 Documents 目录
+    NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+    NSString *logPath = [docPath stringByAppendingPathComponent:@"AntiEdit_Debug.log"];
     
-    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(close)];
-    [self.view addGestureRecognizer:tap];
+    // 加上时间戳
+    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+    [formatter setDateFormat:@"HH:mm:ss"];
+    NSString *timeStr = [formatter stringFromDate:[NSDate date]];
+    
+    NSString *logLine = [NSString stringWithFormat:@"[%@] %@\n", timeStr, message];
+    
+    // 追加写入文件
+    FILE *file = fopen([logPath UTF8String], "a");
+    if (file) {
+        fprintf(file, "%s", [logLine UTF8String]);
+        fclose(file);
+    }
 }
-- (void)close {
-    [self dismissViewControllerAnimated:YES completion:nil];
-}
-@end
 
 static UIViewController* topViewController() {
     UIWindow *keyWindow = nil;
@@ -71,6 +68,19 @@ static UIViewController* topViewController() {
                     savedOldMediaDict = [NSMutableDictionary dictionary];
                 }
                 savedOldMediaDict[[NSString stringWithFormat:@"%d", self.mid]] = self.mediaAttachments;
+                
+                // ==========================================
+                // 将调试信息写入沙盒文件
+                // ==========================================
+                id oldMedia = [self.mediaAttachments firstObject];
+                writeDebugLog(@"=== 拦截到媒体修改 ===");
+                writeDebugLog(@"旧图完整对象: %@", oldMedia);
+                
+                if ([oldMedia respondsToSelector:NSSelectorFromString(@"imageInfo")]) {
+                    id imageInfo = [oldMedia valueForKey:@"imageInfo"];
+                    writeDebugLog(@"旧图 imageInfo: %@", imageInfo);
+                }
+                
                 return;
             }
         }
@@ -81,58 +91,16 @@ static UIViewController* topViewController() {
 %end
 
 %hook LeadEditHistoryViewController
-
 + (void)presentForKey:(id)a0 mediaReplaced:(BOOL)a1 from:(id)a2 {
     if (a1 == YES) {
-        NSArray *oldMediaArray = nil;
-        if (savedOldMediaDict && savedOldMediaDict.count > 0) {
-            oldMediaArray = [[savedOldMediaDict allValues] lastObject]; 
-        }
-        
-        if (oldMediaArray && oldMediaArray.count > 0) {
-            id media = [oldMediaArray firstObject];
-            NSString *className = NSStringFromClass([media class]);
-            
-            if ([className containsString:@"Image"]) {
-                id imageInfo = [media valueForKey:@"imageInfo"];
-                if (imageInfo) {
-                    NSString *url = [imageInfo closestImageUrlWithSize:CGSizeMake(1000, 1000) resultingSize:NULL];
-                    if (url) {
-                        UIImage *oldImage = nil;
-                        
-                        if ([url hasPrefix:@"file://"]) {
-                            NSString *path = [url stringByReplacingOccurrencesOfString:@"file://" withString:@""];
-                            oldImage = [UIImage imageWithContentsOfFile:path];
-                        } else if ([url hasPrefix:@"http"]) {
-                            NSData *data = [NSData dataWithContentsOfURL:[NSURL URLWithString:url]];
-                            if (data) {
-                                oldImage = [UIImage imageWithData:data];
-                            }
-                        }
-                        
-                        if (oldImage) {
-                            dispatch_async(dispatch_get_main_queue(), ^{
-                                AntiEditImageViewerController *vc = [[AntiEditImageViewerController alloc] init];
-                                vc.image = oldImage;
-                                vc.modalPresentationStyle = UIModalPresentationFullScreen;
-                                [topViewController() presentViewController:vc animated:YES completion:nil];
-                            });
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-        
+        writeDebugLog(@"=== 用户点击了编辑记录图标 ===");
         dispatch_async(dispatch_get_main_queue(), ^{
-            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"防编辑提示" message:@"对方试图修改图片，已被拦截。但旧图片已不在本地缓存中。" preferredStyle:UIAlertControllerStyleAlert];
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"防编辑拦截提示" message:@"图片已拦截！请去 Turrit 的 Documents 目录下查看 AntiEdit_Debug.log 获取调试信息。" preferredStyle:UIAlertControllerStyleAlert];
             [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
             [topViewController() presentViewController:alert animated:YES completion:nil];
         });
-        
         return;
     }
     %orig(a0, a1, a2);
 }
-
 %end
