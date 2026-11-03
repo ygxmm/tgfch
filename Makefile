@@ -6,7 +6,7 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = TurritAntiEdit
 TurritAntiEdit_FILES = Tweak.xm AntiEditView.swift
-TurritAntiEdit_CFLAGS = -fobjc-arc
+TurritAntiEdit_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
 TurritAntiEdit_SWIFTFLAGS = -ISwiftRuntimeHeaders
 TurritAntiEdit_FRAMEWORKS = UIKit Foundation
 
