@@ -2,13 +2,14 @@
 #import <UIKit/UIKit.h>
 
 // ==========================================
-// 1. 声明我们要 Hook 的核心类
+// 1. 声明我们要 Hook 的核心类（包含自己创造的方法）
 // ==========================================
 @interface TGMessage : NSObject
 @property (nonatomic) int mid;
 @property (copy, nonatomic) NSString *text;
 @property (retain, nonatomic) NSArray *mediaAttachments;
 @property (nonatomic) BOOL isEdited;
+- (void)showOurEditHistoryPanel; // 补上这个声明，解决报错
 @end
 
 @interface TGImageMediaAttachment : NSObject
@@ -46,12 +47,10 @@ static NSString* extractImageUrl(id imageMedia) {
         if ([imageMedia respondsToSelector:NSSelectorFromString(@"imageInfo")]) {
             id info = [imageMedia valueForKey:@"imageInfo"];
             if (info) {
-                // 方法1：直接拿最大尺寸URL
                 if ([info respondsToSelector:@selector(closestImageUrlWithSize:resultingSize:)]) {
                     NSString *url = [info closestImageUrlWithSize:CGSizeMake(1000, 1000) resultingSize:NULL];
                     if (url) return url;
                 }
-                // 方法2：暴力遍历
                 if ([info respondsToSelector:@selector(allSizes)]) {
                     NSArray *sizes = [info performSelector:@selector(allSizes)];
                     if (sizes.count > 0) {
@@ -111,6 +110,7 @@ static NSString* extractImageUrl(id imageMedia) {
     NSArray *oldMedia = savedOldMediaDict[midStr];
     
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"防编辑拦截" message:[NSString stringWithFormat:@"消息已被拦截。\n\n原文: %@\n包含旧图: %@", oldText ?: @"无", oldMedia.count > 0 ? @"是" : @"否"] preferredStyle:UIAlertControllerStyleActionSheet];
+    
     [alert addAction:[UIAlertAction actionWithTitle:@"查看旧图片" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
         if (oldMedia.count > 0) {
             NSString *url = extractImageUrl([oldMedia firstObject]);
@@ -131,14 +131,24 @@ static NSString* extractImageUrl(id imageMedia) {
                     [imgAlert addAction:[UIAlertAction actionWithTitle:@"关闭" style:UIAlertActionStyleDefault handler:nil]];
                     [topViewController() presentViewController:imgAlert animated:YES completion:nil];
                 } else {
-                    UIAlertController *failAlert = [UIAlertController alertControllerWithTitle:@"提示" message:[NSString stringWithFormat:@"拿不到图片路径。\n图片URL: %@", url] preferredStyle:UIAlertControllerStyleAlert];
+                    UIAlertController *failAlert = [UIAlertController alertControllerWithTitle:@"提示" message:[NSString stringWithFormat:@"拿不到图片内容。\nURL: %@", url] preferredStyle:UIAlertControllerStyleAlert];
                     [failAlert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
                     [topViewController() presentViewController:failAlert animated:YES completion:nil];
                 }
+            } else {
+                UIAlertController *nilAlert = [UIAlertController alertControllerWithTitle:@"提示" message:@"无法提取旧图片的 URL 路径" preferredStyle:UIAlertControllerStyleAlert];
+                [nilAlert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+                [topViewController() presentViewController:nilAlert animated:YES completion:nil];
             }
         }
     }]];
+    
     [alert addAction:[UIAlertAction actionWithTitle:@"关闭" style:UIAlertActionStyleCancel handler:nil]];
+    
+    // iPad 兼容
+    alert.popoverPresentationController.sourceView = topViewController().view;
+    alert.popoverPresentationController.sourceRect = CGRectMake(topViewController().view.bounds.size.width / 2, topViewController().view.bounds.size.height / 2, 1.0, 1.0);
+    
     [topViewController() presentViewController:alert animated:YES completion:nil];
 }
 
