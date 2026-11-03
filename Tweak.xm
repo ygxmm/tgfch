@@ -14,7 +14,8 @@
 @end
 
 @interface TGImageInfo : NSObject
-- (id)closestImageUrlWithSize:(struct CGSize { double x0; double x1; })a0 resultingSize:(struct CGSize { double x0; double x1; } *)a1;
+// 直接使用 UIKit 自带的 CGSize
+- (id)closestImageUrlWithSize:(CGSize)a0 resultingSize:(CGSize *)a1;
 @end
 
 @interface LeadEditHistoryViewController : UIViewController
@@ -25,7 +26,7 @@
 static NSMutableDictionary *savedOldMediaDict = nil;
 
 // ==========================================
-// 自定义一个简单的全屏看图控制器
+// 自定义全屏看图控制器
 // ==========================================
 @interface AntiEditImageViewerController : UIViewController
 @property (nonatomic, strong) UIImage *image;
@@ -42,7 +43,6 @@ static NSMutableDictionary *savedOldMediaDict = nil;
     imageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self.view addSubview:imageView];
     
-    // 点击任意位置关闭
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(close)];
     [self.view addGestureRecognizer:tap];
 }
@@ -60,7 +60,6 @@ static NSMutableDictionary *savedOldMediaDict = nil;
     if (self.mediaAttachments != nil && self.mediaAttachments.count > 0) {
         if (mediaAttachments != nil && mediaAttachments.count > 0) {
             
-            id oldMedia = [self.mediaAttachments firstObject];
             id newMedia = [mediaAttachments firstObject];
             NSString *newClass = NSStringFromClass([newMedia class]);
             
@@ -70,7 +69,6 @@ static NSMutableDictionary *savedOldMediaDict = nil;
                 if (!savedOldMediaDict) {
                     savedOldMediaDict = [NSMutableDictionary dictionary];
                 }
-                // 用消息的 mid 作为 Key 存入旧媒体
                 savedOldMediaDict[[NSString stringWithFormat:@"%d", self.mid]] = self.mediaAttachments;
                 
                 return; // 拒绝更新
@@ -82,6 +80,23 @@ static NSMutableDictionary *savedOldMediaDict = nil;
 
 %end
 
+// 辅助函数：获取当前最顶层的 ViewController (解决 keyWindow 弃用警告)
+static UIViewController* topViewController() {
+    UIWindow *keyWindow = nil;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    keyWindow = [UIApplication sharedApplication].keyWindow;
+#pragma clang diagnostic pop
+    if (!keyWindow) {
+        keyWindow = [UIApplication sharedApplication].windows.firstObject;
+    }
+    UIViewController *rootVC = keyWindow.rootViewController;
+    while (rootVC.presentedViewController) {
+        rootVC = rootVC.presentedViewController;
+    }
+    return rootVC;
+}
+
 // ==========================================
 // 2. 拦截弹窗，自己弹旧图
 // ==========================================
@@ -91,11 +106,9 @@ static NSMutableDictionary *savedOldMediaDict = nil;
     if (a1 == YES) {
         NSLog(@"[TurritAntiEdit] 触发图片查看拦截！Key: %@", a0);
         
-        // 由于 a0 可能是复合字符串，我们尝试取最近一次保存的旧图
-        // 如果你想严谨匹配，可以从 a0 里正则提取 mid，这里为了兼容性取最后一次拦截的图
         NSArray *oldMediaArray = nil;
         if (savedOldMediaDict && savedOldMediaDict.count > 0) {
-            // 这里简单处理：取字典里最后一个保存的图（或者根据当前界面去匹配）
+            // 取最后一次保存的图
             oldMediaArray = [[savedOldMediaDict allValues] lastObject]; 
         }
         
@@ -104,13 +117,11 @@ static NSMutableDictionary *savedOldMediaDict = nil;
             NSString *className = NSStringFromClass([media class]);
             
             if ([className containsString:@"Image"]) {
-                // 提取 URL
                 id imageInfo = [media valueForKey:@"imageInfo"];
                 if (imageInfo) {
                     NSString *url = [imageInfo closestImageUrlWithSize:CGSizeMake(1000, 1000) resultingSize:NULL];
                     if (url) {
                         NSLog(@"[TurritAntiEdit] 找到旧图路径: %@", url);
-                        // 兼容处理 file:// 路径
                         NSString *path = [url stringByReplacingOccurrencesOfString:@"file://" withString:@""];
                         UIImage *oldImage = [UIImage imageWithContentsOfFile:path];
                         
@@ -119,7 +130,7 @@ static NSMutableDictionary *savedOldMediaDict = nil;
                                 AntiEditImageViewerController *vc = [[AntiEditImageViewerController alloc] init];
                                 vc.image = oldImage;
                                 vc.modalPresentationStyle = UIModalPresentationFullScreen;
-                                [[UIApplication sharedApplication].keyWindow.rootViewController presentViewController:vc animated:YES completion:nil];
+                                [topViewController() presentViewController:vc animated:YES completion:nil];
                             });
                             return; // 成功弹出图片，结束执行
                         }
@@ -128,11 +139,11 @@ static NSMutableDictionary *savedOldMediaDict = nil;
             }
         }
         
-        // 如果上面提取图片失败（比如图片不在本地缓存），就降级弹个提示框
+        // 降级方案
         dispatch_async(dispatch_get_main_queue(), ^{
-            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"防编辑提示" message:@"旧图片已成功保留在聊天界面。\n(未找到本地缓存原图文件)" preferredStyle:UIAlertControllerStyleAlert];
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"防编辑提示" message:@"旧图片已成功保留在聊天界面。\n(未找到本地缓存原图文件，可能已被系统清理)" preferredStyle:UIAlertControllerStyleAlert];
             [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
-            [[UIApplication sharedApplication].keyWindow.rootViewController presentViewController:alert animated:YES completion:nil];
+            [topViewController() presentViewController:alert animated:YES completion:nil];
         });
         
         return;
