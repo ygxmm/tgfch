@@ -1,9 +1,11 @@
 import UIKit
 
-@objc public class AntiEditViewerController: UIViewController {
+@objc(AntiEditViewerController)
+public class AntiEditViewerController: UIViewController {
     var imageUrlString: String = ""
     
-    @objc public static func present(from vc: UIViewController, imageUrl: String) {
+    @objc(presentFrom:imageUrl:)
+    public static func present(from vc: UIViewController, imageUrl: String) {
         let viewer = AntiEditViewerController()
         viewer.imageUrlString = imageUrl
         viewer.modalPresentationStyle = .fullScreen
@@ -26,7 +28,6 @@ import UIKit
         closeButton.addTarget(self, action: #selector(close), for: .touchUpInside)
         self.view.addSubview(closeButton)
         
-        // 加载图片
         if imageUrlString.hasPrefix("http") {
             if let url = URL(string: imageUrlString), let data = try? Data(contentsOf: url) {
                 imageView.image = UIImage(data: data)

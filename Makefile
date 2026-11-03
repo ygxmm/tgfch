@@ -9,5 +9,6 @@ TurritAntiEdit_FILES = Tweak.xm AntiEditView.swift
 TurritAntiEdit_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
 TurritAntiEdit_SWIFTFLAGS = -ISwiftRuntimeHeaders
 TurritAntiEdit_FRAMEWORKS = UIKit Foundation
+TurritAntiEdit_LDFLAGS = -undefined dynamic_lookup
 
 include $(THEOS_MAKE_PATH)/tweak.mk
