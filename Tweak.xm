@@ -2,27 +2,34 @@
 #import <UIKit/UIKit.h>
 
 // ==========================================
-// 核心：安全写入日志到 /var/mobile/Documents/
+// 核心：安全写入日志到 App 自身的沙盒 Documents 目录
 // ==========================================
 void writeProbeLog(NSString *format, ...) {
-    va_list args;
-    va_start(args, format);
-    NSString *msg = [[NSString alloc] initWithFormat:format arguments:args];
-    va_end(args);
-    
-    NSString *path = @"/var/mobile/Documents/TurritAntiEdit.log";
-    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-    [formatter setDateFormat:@"HH:mm:ss"];
-    NSString *timeStr = [formatter stringFromDate:[NSDate date]];
-    NSString *line = [NSString stringWithFormat:@"[%@] %@\n", timeStr, msg];
-    
-    NSFileHandle *file = [NSFileHandle fileHandleForWritingAtPath:path];
-    if (!file) {
-        [line writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    } else {
-        [file seekToEndOfFile];
-        [file writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
-        [file closeFile];
+    @try {
+        va_list args;
+        va_start(args, format);
+        NSString *msg = [[NSString alloc] initWithFormat:format arguments:args];
+        va_end(args);
+        
+        // 获取当前 App (Turrit) 沙盒的 Documents 目录
+        NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+        NSString *path = [docPath stringByAppendingPathComponent:@"TurritAntiEdit.log"];
+        
+        NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+        [formatter setDateFormat:@"HH:mm:ss"];
+        NSString *timeStr = [formatter stringFromDate:[NSDate date]];
+        NSString *line = [NSString stringWithFormat:@"[%@] %@\n", timeStr, msg];
+        
+        NSFileHandle *file = [NSFileHandle fileHandleForWritingAtPath:path];
+        if (!file) {
+            [line writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        } else {
+            [file seekToEndOfFile];
+            [file writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+            [file closeFile];
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[TurritAntiEdit] 写日志失败: %@", e);
     }
 }
 
@@ -44,7 +51,7 @@ void writeProbeLog(NSString *format, ...) {
 %end
 
 // ==========================================
-// 2. 探针：消息解析入口 (带真实 Swift 名字)
+// 2. 探针：消息解析入口
 // ==========================================
 @interface _TtC12TelegramCore13Serialization : NSObject
 - (id)parseMessage:(id)a0;
@@ -95,7 +102,7 @@ void writeProbeLog(NSString *format, ...) {
 %end
 
 // ==========================================
-// 4. 探针：全局检查 (注意这里不需要 %end)
+// 4. 探针：全局检查
 // ==========================================
 %ctor {
     writeProbeLog(@"--- Tweak 成功注入启动 ---");
