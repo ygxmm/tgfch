@@ -1,21 +1,14 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
-// ==========================================
-// 补齐头文件声明，让编译器闭嘴
-// ==========================================
-@interface TGMessage : NSObject
-@property (nonatomic) int mid;
-@property (retain, nonatomic) NSArray *mediaAttachments;
+// 基于 dump 的头文件精准声明
+@interface TLParser : NSObject
++ (id)editHistoryForKey:(id)a0;
++ (id)editHistoryForMessageId:(id)a0;
 @end
 
-@interface TGImageMediaAttachment : NSObject
-@property (nonatomic) long long imageId;
-@property (retain, nonatomic) id imageInfo;
-@end
-
-@interface TGImageInfo : NSObject
-- (id)allSizes;
+@interface LeadEditHistoryViewController : UIViewController
++ (void)presentForKey:(id)a0 mediaReplaced:(BOOL)a1 from:(id)a2;
 @end
 
 static UIViewController* topViewController() {
@@ -30,53 +23,32 @@ static UIViewController* topViewController() {
     return rootVC;
 }
 
-%hook TGMessage
+%hook LeadEditHistoryViewController
 
-- (void)setMediaAttachments:(NSArray *)mediaAttachments {
-    if (self.mediaAttachments != nil && self.mediaAttachments.count > 0) {
-        if (mediaAttachments != nil && mediaAttachments.count > 0) {
-            id newMedia = [mediaAttachments firstObject];
-            if ([NSStringFromClass([newMedia class]) containsString:@"Image"]) {
-                
-                id oldMedia = [self.mediaAttachments firstObject];
-                
-                // 强行提取内部信息
-                NSString *mediaDesc = [oldMedia description];
-                TGImageInfo *imageInfo = nil;
-                NSArray *sizes = nil;
-                long long imgId = 0;
-                
-                @try {
-                    if ([oldMedia respondsToSelector:NSSelectorFromString(@"imageId")]) {
-                        imgId = [[oldMedia valueForKey:@"imageId"] longLongValue];
-                    }
-                    if ([oldMedia respondsToSelector:NSSelectorFromString(@"imageInfo")]) {
-                        imageInfo = [oldMedia valueForKey:@"imageInfo"];
-                    }
-                    if ([imageInfo respondsToSelector:@selector(allSizes)]) {
-                        sizes = [imageInfo allSizes];
-                    }
-                } @catch (NSException *e) {}
-
-                NSString *probeMsg = [NSString stringWithFormat:@"imageId: %lld\n\nallSizes: %@\n\nimageInfo: %@\n\n旧对象: %@", 
-                                      imgId, sizes, imageInfo, mediaDesc];
-                
-                // 字数太多只取前1000个字符，防止弹窗崩溃
-                if (probeMsg.length > 1000) {
-                    probeMsg = [probeMsg substringToIndex:1000];
-                }
-
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"旧图探针数据" message:probeMsg preferredStyle:UIAlertControllerStyleAlert];
-                    [alert addAction:[UIAlertAction actionWithTitle:@"知道了" style:UIAlertActionStyleDefault handler:nil]];
-                    [topViewController() presentViewController:alert animated:YES completion:nil];
-                });
-                
-                return; // 拒绝更新
-            }
-        }
++ (void)presentForKey:(id)a0 mediaReplaced:(BOOL)a1 from:(id)a2 {
+    
+    // 从 TLParser 精准获取对应的历史数据
+    id history = nil;
+    if ([TLParser respondsToSelector:@selector(editHistoryForKey:)]) {
+        history = [TLParser editHistoryForKey:a0];
     }
-    %orig(mediaAttachments);
+    
+    // 拼装探针数据
+    NSString *probeStr = [NSString stringWithFormat:@"Key: %@\n\nmediaReplaced: %d\n\n[TLParser获取的历史数据]:\n%@", a0, a1, history];
+    
+    // 限制一下字数，免得太大崩溃
+    if (probeStr.length > 1500) {
+        probeStr = [probeStr substringToIndex:1500];
+    }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"探针：历史数据" message:probeStr preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"关闭" style:UIAlertActionStyleDefault handler:nil]];
+        [topViewController() presentViewController:alert animated:YES completion:nil];
+    });
+    
+    // 绝对不执行 %orig，原生的那个“媒体已被替换”灰框将被彻底拦截！
+    return; 
 }
 
 %end
