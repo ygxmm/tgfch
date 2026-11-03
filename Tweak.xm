@@ -2,10 +2,6 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
-@interface AntiEditViewerController : UIViewController
-+ (void)presentFrom:(UIViewController *)vc imageUrl:(NSString *)url;
-@end
-
 void writeProbeLog(NSString *format, ...) {
     @try {
         va_list args;
@@ -21,61 +17,57 @@ void writeProbeLog(NSString *format, ...) {
     } @catch (NSException *e) {}
 }
 
-%hook TelegramUI_ChatControllerImpl
+// 探针 1: 监测所有视图控制器的加载 (找 UI 切入点)
+%hook UIViewController
 - (void)viewDidLoad {
     %orig;
-    writeProbeLog(@"[UI] ChatControllerImpl viewDidLoad 触发");
-}
-- (void)viewDidAppear:(BOOL)animated {
-    %orig;
-    writeProbeLog(@"[UI] ChatControllerImpl viewDidAppear 触发");
-}
-%end
-
-@interface TelegramCore_Serialization : NSObject
-- (id)parseMessage:(id)a0;
-@end
-%hook TelegramCore_Serialization
-- (id)parseMessage:(id)a0 {
-    id res = %orig;
-    if (res) {
-        NSString *cls = NSStringFromClass([res class]);
-        writeProbeLog(@"[网络] 解析出包: %@", cls);
-    }
-    return res;
-}
-%end
-
-@interface TelegramCore_MtProtoKitUpdateSinkService : NSObject
-- (void)mtProto:(id)a0 receivedMessage:(id)a1 authInfoSelector:(long long)a2 networkType:(int)a3;
-@end
-%hook TelegramCore_MtProtoKitUpdateSinkService
-- (void)mtProto:(id)a0 receivedMessage:(id)a1 authInfoSelector:(long long)a2 networkType:(int)a3 {
-    NSString *cls = NSStringFromClass([a1 class]);
-    writeProbeLog(@"[底层网络] 收到消息包: %@", cls);
-    %orig;
-}
-%end
-
-@interface TurritUIFramework_TGMessage : NSObject
-- (void)setMediaAttachments:(NSArray *)arg1;
-@end
-%hook TurritUIFramework_TGMessage
-- (void)setMediaAttachments:(NSArray *)arg1 {
-    writeProbeLog(@"[UI] TGMessage setMediaAttachments 触发，拦截！");
-    return;
-}
-%end
-
-%hook NSObject
-- (void)setValue:(id)value forKey:(NSString *)key {
-    %orig;
-    if ([key isEqualToString:@"message"] || [key isEqualToString:@"media"] || [key isEqualToString:@"mediaAttachments"]) {
-        writeProbeLog(@"[KVC] %@ setValue forKey: %@ 触发", NSStringFromClass([self class]), key);
+    NSString *cls = NSStringFromClass([self class]);
+    // 只要类名带 Chat 或 Edit 或 Media，就记录下来
+    if ([cls containsString:@"Chat"] || [cls containsString:@"Edit"] || [cls containsString:@"Media"] || [cls containsString:@"Turrit"]) {
+        writeProbeLog(@"[UI] 发现类加载: %@", cls);
     }
 }
 %end
 
-%ctor {
-    writeProbeLog(@"--- Tweak 成功注入启动 ---");
+// 探针 2: 监测 TLParser (Lead 曾经利用的核心类)
+@interface TLParser : NSObject
++ (id)handleResponse:(id)a0 functionID:(id)a1;
++ (id)getMessageTextFromNode:(id)a0;
++ (id)getDebugDumpFromNode:(id)a0;
+@end
+
+%hook TLParser
++ (id)handleResponse:(id)a0 functionID:(id)a1 {
+    writeProbeLog(@"[TLParser] 收到网络响应! functionID: %@", a1);
+    return %orig;
 }
++ (id)getMessageTextFromNode:(id)a0 {
+    writeProbeLog(@"[TLParser] 获取消息文本节点");
+    return %orig;
+}
++ (id)getDebugDumpFromNode:(id)a0 {
+    writeProbeLog(@"[TLParser] 调试节点被调用");
+    return %orig;
+}
+%end
+
+// 探针 3: 网络接收底层 (MtProtoKit)
+@interface MTProtoKit_MtProto : NSObject
+- (void)setMessageService:(id)a0;
+@end
+%hook MTProtoKit_MtProto
+- (void)setMessageService:(id)a0 {
+    writeProbeLog(@"[网络] MTProto 服务注册: %@", NSStringFromClass([a0 class]));
+    %orig;
+}
+%end
+
+// 探针 4: 数据库写入 (SQLite)
+%hook NSFileManager
+- (BOOL)createFileAtPath:(NSString *)path contents:(NSData *)data attributes:(NSDictionary *)attr {
+    if ([path containsString:@"postbox"] || [path containsString:@"database"] || [path containsString:@"db"]) {
+        writeProbeLog(@"[数据库] 试图写入文件: %@", path);
+    }
+    return %orig;
+}
+%end
