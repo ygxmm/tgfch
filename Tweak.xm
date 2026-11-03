@@ -2,12 +2,10 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
-// 强制声明我们写的 Swift 类，防止链接报错
 @interface AntiEditViewerController : UIViewController
 + (void)presentFrom:(UIViewController *)vc imageUrl:(NSString *)url;
 @end
 
-// 写日志工具
 void writeProbeLog(NSString *format, ...) {
     @try {
         va_list args;
@@ -23,22 +21,6 @@ void writeProbeLog(NSString *format, ...) {
     } @catch (NSException *e) {}
 }
 
-// 当前界面辅助函数
-static UIViewController* topViewController() {
-    UIWindow *keyWindow = nil;
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    keyWindow = [UIApplication sharedApplication].keyWindow;
-    if (!keyWindow) keyWindow = [UIApplication sharedApplication].windows.firstObject;
-#pragma clang diagnostic pop
-    UIViewController *rootVC = keyWindow.rootViewController;
-    while (rootVC.presentedViewController) rootVC = rootVC.presentedViewController;
-    return rootVC;
-}
-
-// ==========================================
-// 埋点 1: UI 层控制器 (从 DYKiller 抓出的真实类名)
-// ==========================================
 %hook TelegramUI_ChatControllerImpl
 - (void)viewDidLoad {
     %orig;
@@ -50,9 +32,6 @@ static UIViewController* topViewController() {
 }
 %end
 
-// ==========================================
-// 埋点 2: 底层网络解析器 (带点号的真实类名)
-// ==========================================
 @interface TelegramCore_Serialization : NSObject
 - (id)parseMessage:(id)a0;
 @end
@@ -67,9 +46,6 @@ static UIViewController* topViewController() {
 }
 %end
 
-// ==========================================
-// 埋点 3: MTProto 接收服务
-// ==========================================
 @interface TelegramCore_MtProtoKitUpdateSinkService : NSObject
 - (void)mtProto:(id)a0 receivedMessage:(id)a1 authInfoSelector:(long long)a2 networkType:(int)a3;
 @end
@@ -81,9 +57,6 @@ static UIViewController* topViewController() {
 }
 %end
 
-// ==========================================
-// 埋点 4: 尝试拦截可能用到的 TGMessage (带点号版本)
-// ==========================================
 @interface TurritUIFramework_TGMessage : NSObject
 - (void)setMediaAttachments:(NSArray *)arg1;
 @end
@@ -94,9 +67,6 @@ static UIViewController* topViewController() {
 }
 %end
 
-// ==========================================
-// 埋点 5: 全局钩住数据更新 (即使纯 Swift 也会走 setValue)
-// ==========================================
 %hook NSObject
 - (void)setValue:(id)value forKey:(NSString *)key {
     %orig;
@@ -105,3 +75,7 @@ static UIViewController* topViewController() {
     }
 }
 %end
+
+%ctor {
+    writeProbeLog(@"--- Tweak 成功注入启动 ---");
+}
