@@ -1,19 +1,59 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
-// 声明缺失的类和属性
+// ==========================================
+// 声明缺失的类和方法
+// ==========================================
 @interface TGMessage : NSObject
 @property (nonatomic) int mid;
 @property (retain, nonatomic) NSArray *mediaAttachments;
+@end
+
+@interface TGImageMediaAttachment : NSObject
+@property (retain, nonatomic) id imageInfo;
+@end
+
+@interface TGImageInfo : NSObject
+- (id)closestImageUrlWithSize:(struct CGSize { double x0; double x1; })a0 resultingSize:(struct CGSize { double x0; double x1; } *)a1;
 @end
 
 @interface LeadEditHistoryViewController : UIViewController
 + (void)presentForKey:(id)a0 mediaReplaced:(BOOL)a1 from:(id)a2;
 @end
 
-// 全局字典，用来按消息 ID 保存旧图片
-static NSMutableDictionary *oldMediaStore = nil;
+// 全局字典：存放被拦截的旧图 (Key: 消息ID字符串, Value: 媒体数组)
+static NSMutableDictionary *savedOldMediaDict = nil;
 
+// ==========================================
+// 自定义一个简单的全屏看图控制器
+// ==========================================
+@interface AntiEditImageViewerController : UIViewController
+@property (nonatomic, strong) UIImage *image;
+@end
+
+@implementation AntiEditImageViewerController
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor blackColor];
+    
+    UIImageView *imageView = [[UIImageView alloc] initWithImage:self.image];
+    imageView.contentMode = UIViewContentModeScaleAspectFit;
+    imageView.frame = self.view.bounds;
+    imageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [self.view addSubview:imageView];
+    
+    // 点击任意位置关闭
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(close)];
+    [self.view addGestureRecognizer:tap];
+}
+- (void)close {
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+@end
+
+// ==========================================
+// 1. 拦截消息本身，保存旧图
+// ==========================================
 %hook TGMessage
 
 - (void)setMediaAttachments:(NSArray *)mediaAttachments {
@@ -22,17 +62,16 @@ static NSMutableDictionary *oldMediaStore = nil;
             
             id oldMedia = [self.mediaAttachments firstObject];
             id newMedia = [mediaAttachments firstObject];
-            NSString *oldClass = NSStringFromClass([oldMedia class]);
             NSString *newClass = NSStringFromClass([newMedia class]);
             
             if ([newClass containsString:@"Image"] || [newClass containsString:@"Video"]) {
-                NSLog(@"[TurritAntiEdit] 🛑 成功拦截媒体修改！原类型: %@, 新类型: %@", oldClass, newClass);
+                NSLog(@"[TurritAntiEdit] 🛑 拦截媒体修改！保存旧图用于查看。");
                 
-                // 把旧媒体对象存下来，键值为消息的 mid
-                if (!oldMediaStore) {
-                    oldMediaStore = [NSMutableDictionary dictionary];
+                if (!savedOldMediaDict) {
+                    savedOldMediaDict = [NSMutableDictionary dictionary];
                 }
-                oldMediaStore[@(self.mid)] = self.mediaAttachments;
+                // 用消息的 mid 作为 Key 存入旧媒体
+                savedOldMediaDict[[NSString stringWithFormat:@"%d", self.mid]] = self.mediaAttachments;
                 
                 return; // 拒绝更新
             }
@@ -43,21 +82,61 @@ static NSMutableDictionary *oldMediaStore = nil;
 
 %end
 
-// 当用户试图查看编辑记录时：
+// ==========================================
+// 2. 拦截弹窗，自己弹旧图
+// ==========================================
 %hook LeadEditHistoryViewController
 
 + (void)presentForKey:(id)a0 mediaReplaced:(BOOL)a1 from:(id)a2 {
-    // 如果我们有拦截过这张图，且它试图弹窗
-    // 这里我们让它正常弹窗（你可以看到“媒体已被替换”），但在终端打印出旧图信息
-    // 因为纯 ObjC 替换 SwiftUI 界面非常容易导致崩溃
-    
-    NSLog(@"[TurritAntiEdit] 编辑记录被打开，mediaReplaced=%d, key=%@", a1, a0);
-    
     if (a1 == YES) {
-        // 你可以在这里发一个本地通知，或者打印日志，证明我们确实保留了旧图
-        NSLog(@"[TurritAntiEdit] 我们知道旧图，但这里为了稳定性不作视图替换");
+        NSLog(@"[TurritAntiEdit] 触发图片查看拦截！Key: %@", a0);
+        
+        // 由于 a0 可能是复合字符串，我们尝试取最近一次保存的旧图
+        // 如果你想严谨匹配，可以从 a0 里正则提取 mid，这里为了兼容性取最后一次拦截的图
+        NSArray *oldMediaArray = nil;
+        if (savedOldMediaDict && savedOldMediaDict.count > 0) {
+            // 这里简单处理：取字典里最后一个保存的图（或者根据当前界面去匹配）
+            oldMediaArray = [[savedOldMediaDict allValues] lastObject]; 
+        }
+        
+        if (oldMediaArray && oldMediaArray.count > 0) {
+            id media = [oldMediaArray firstObject];
+            NSString *className = NSStringFromClass([media class]);
+            
+            if ([className containsString:@"Image"]) {
+                // 提取 URL
+                id imageInfo = [media valueForKey:@"imageInfo"];
+                if (imageInfo) {
+                    NSString *url = [imageInfo closestImageUrlWithSize:CGSizeMake(1000, 1000) resultingSize:NULL];
+                    if (url) {
+                        NSLog(@"[TurritAntiEdit] 找到旧图路径: %@", url);
+                        // 兼容处理 file:// 路径
+                        NSString *path = [url stringByReplacingOccurrencesOfString:@"file://" withString:@""];
+                        UIImage *oldImage = [UIImage imageWithContentsOfFile:path];
+                        
+                        if (oldImage) {
+                            dispatch_async(dispatch_get_main_queue(), ^{
+                                AntiEditImageViewerController *vc = [[AntiEditImageViewerController alloc] init];
+                                vc.image = oldImage;
+                                vc.modalPresentationStyle = UIModalPresentationFullScreen;
+                                [[UIApplication sharedApplication].keyWindow.rootViewController presentViewController:vc animated:YES completion:nil];
+                            });
+                            return; // 成功弹出图片，结束执行
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 如果上面提取图片失败（比如图片不在本地缓存），就降级弹个提示框
+        dispatch_async(dispatch_get_main_queue(), ^{
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"防编辑提示" message:@"旧图片已成功保留在聊天界面。\n(未找到本地缓存原图文件)" preferredStyle:UIAlertControllerStyleAlert];
+            [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+            [[UIApplication sharedApplication].keyWindow.rootViewController presentViewController:alert animated:YES completion:nil];
+        });
+        
+        return;
     }
-    
     %orig(a0, a1, a2);
 }
 
