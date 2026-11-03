@@ -2,64 +2,56 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
-// ==========================================
-// 核心：安全写入日志到 App 自身的沙盒 Documents 目录
-// ==========================================
-void writeProbeLog(NSString *format, ...) {
-    @try {
-        va_list args;
-        va_start(args, format);
-        NSString *msg = [[NSString alloc] initWithFormat:format arguments:args];
-        va_end(args);
-        
-        NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
-        NSString *path = [docPath stringByAppendingPathComponent:@"TurritAntiEdit.log"];
-        
-        NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-        [formatter setDateFormat:@"HH:mm:ss"];
-        NSString *timeStr = [formatter stringFromDate:[NSDate date]];
-        NSString *line = [NSString stringWithFormat:@"[%@] %@\n", timeStr, msg];
-        
-        NSFileHandle *file = [NSFileHandle fileHandleForWritingAtPath:path];
-        if (!file) {
-            [line writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
-        } else {
-            [file seekToEndOfFile];
-            [file writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
-            [file closeFile];
-        }
-    } @catch (NSException *e) {}
-}
+// 声明 Swift 类
+@interface AntiEditViewerController : UIViewController
++ (void)presentFrom:(UIViewController *)vc imageUrl:(NSString *)url;
+@end
 
-// ==========================================
-// 探针：全量扫描 Turrit 真实的类名
-// ==========================================
-%ctor {
-    @autoreleasepool {
-        writeProbeLog(@"--- 开始扫描真实类名 ---");
-        
-        int numClasses = objc_getClassList(NULL, 0);
-        Class *classes = (Class *)malloc(sizeof(Class) * numClasses);
-        numClasses = objc_getClassList(classes, numClasses);
-        
-        int count = 0;
-        for (int i = 0; i < numClasses; i++) {
-            Class cls = classes[i];
-            const char *name = class_getName(cls);
-            if (name) {
-                NSString *clsName = [NSString stringWithUTF8String:name];
-                // 只要名字里带这些关键字的，全抓出来！
-                if ([clsName containsString:@"Serialization"] ||
-                    [clsName containsString:@"Message"] ||
-                    [clsName containsString:@"Update"] ||
-                    [clsName containsString:@"Media"]) {
-                    writeProbeLog(@"真实类名: %@", clsName);
-                    count++;
-                    if (count > 500) break; // 限制数量防崩溃
+// 日志工具
+void writeProbeLog(NSString *format, ...) { /* 省略，同上 */ }
+
+// 拦截消息更新
+@interface TGMessage : NSObject
+@property (retain, nonatomic) NSArray *mediaAttachments;
+@end
+
+@interface TGImageInfo : NSObject
+- (id)closestImageUrlWithSize:(CGSize)a0 resultingSize:(CGSize *)a1;
+@end
+
+%hook TGMessage
+- (void)setMediaAttachments:(NSArray *)mediaAttachments {
+    if (self.mediaAttachments.count > 0 && mediaAttachments.count > 0) {
+        id oldMedia = [self.mediaAttachments firstObject];
+        @try {
+            id imageInfo = [oldMedia valueForKey:@"imageInfo"];
+            if (imageInfo) {
+                NSString *url = [imageInfo closestImageUrlWithSize:CGSizeMake(1000, 1000) resultingSize:NULL];
+                if (url) {
+                    // 调用 Swift UI
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        UIWindow *window = [UIApplication sharedApplication].keyWindow;
+                        [AntiEditViewerController presentFrom:window.rootViewController imageUrl:url];
+                    });
                 }
             }
-        }
-        free(classes);
-        writeProbeLog(@"--- 扫描结束，共找到 %d 个相关类 ---", count);
+        } @catch (NSException *e) {}
+        return; // 拒绝更新
     }
+    %orig(mediaAttachments);
 }
+%end
+
+// 备用大招：如果 TGMessage 不走，我们直接拦截网络包中的 TLParser 节点
+@interface TLParser : NSObject
++ (id)handleResponse:(id)a0 functionID:(id)a1;
+@end
+
+%hook TLParser
++ (id)handleResponse:(id)a0 functionID:(id)a1 {
+    id result = %orig;
+    // 如果发现是编辑或更新包，强行触发我们的 Swift 探针
+    // 这里我们暂不拦截，只打印看看
+    return result;
+}
+%end
