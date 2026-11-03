@@ -1,0 +1,22 @@
+name: Build Tweak
+on: [push, workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install Theos
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git make clang lldb libplist3
+          git clone --recursive https://github.com/theos/theos.git ~/theos
+          echo "THEOS=~/theos" >> $GITHUB_ENV
+      - name: Build
+        run: |
+          export PATH=~/theos/bin:$PATH
+          make package FINALPACKAGE=1
+      - name: Upload deb
+        uses: actions/upload-artifact@v3
+        with:
+          name: tweak-deb
+          path: packages/*.deb

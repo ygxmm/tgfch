@@ -1,0 +1,9 @@
+Package: com.tzyhb.turrit-anti-edit
+Name: TurritAntiEdit
+Version: 1.0.0
+Architecture: iphoneos-arm64
+Description: Prevent image and text edit for Turrit
+Maintainer: tzyhb
+Author: tzyhb
+Section: Tweaks
+Depends: mobilesubstrate
