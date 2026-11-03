@@ -1,11 +1,10 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
-#import <objc/runtime.h>
 
 void logPacket(NSString *text) {
     @try {
         NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
-        NSString *path = [docPath stringByAppendingPathComponent:@"Turrit_Safe.txt"];
+        NSString *path = [docPath stringByAppendingPathComponent:@"Turrit_Blocked.txt"];
         NSFileHandle *file = [NSFileHandle fileHandleForWritingAtPath:path];
         if (!file) { [text writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil]; }
         else { [file seekToEndOfFile]; [file writeData:[text dataUsingEncoding:NSUTF8StringEncoding]]; [file closeFile]; }
@@ -16,47 +15,68 @@ void logPacket(NSString *text) {
 - (id)parseMessage:(id)a0 {
     id result = %orig;
     
-    // 放到后台线程处理日志，绝不卡主线程
     if (result) {
-        @try {
-            NSString *clsName = NSStringFromClass([result class]);
-            if ([clsName containsString:@"BoxedMessage"]) {
-                // 安全获取 Swift 对象的内部字符串描述
-                NSString *desc = [result description];
-                
-                // 如果描述里包含 Edit 相关的词，记录下来
-                if ([desc containsString:@"Edit"] || [desc containsString:@"Delete"] || desc.length > 100) {
-                    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-                        logPacket([NSString stringWithFormat:@"\n[抓到包] 类名: %@\n描述: %@\n", clsName, desc]);
-                    });
-                }
-            }
-        } @catch (NSException *e) {}
+        NSString *desc = [result description];
+        
+        // 1. 拦截撤回指令 (updateDeleteChannelMessages / updateDeleteMessages)
+        if ([desc containsString:@"updateDeleteChannelMessages"] || [desc containsString:@"updateDeleteMessages"]) {
+            logPacket([NSString stringWithFormat:@"🛑 [防撤回] 拦截并丢弃数据包: %@\n\n", desc]);
+            return nil; // 丢弃这个数据包，界面不会消失！
+        }
+        
+        // 2. 拦截编辑指令 (updateEditMessage / updateEditChannelMessage)
+        if ([desc containsString:@"updateEditMessage"] || [desc containsString:@"updateEditChannelMessage"]) {
+            logPacket([NSString stringWithFormat:@"🛑 [防编辑] 拦截并丢弃数据包: %@\n\n", desc]);
+            return nil; // 丢弃这个数据包，内容不会改变！
+        }
     }
     
     return result;
 }
 %end
 
+// 注入一个悬浮按钮方便看日志
+@interface BlockHandler : NSObject
++ (instancetype)shared;
+- (void)showLog:(UIButton *)sender;
+@end
+@implementation BlockHandler
++ (instancetype)shared {
+    static BlockHandler *instance = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ instance = [[BlockHandler alloc] init]; });
+    return instance;
+}
+- (void)showLog:(UIButton *)sender {
+    NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+    NSString *path = [docPath stringByAppendingPathComponent:@"Turrit_Blocked.txt"];
+    NSString *content = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+    if (!content || content.length == 0) content = @"没有拦截到任何数据。";
+    if (content.length > 1000) content = [content substringFromIndex:content.length - 1000];
+    
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"拦截日志" message:content preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+    
+    UIViewController *topVC = [UIApplication sharedApplication].keyWindow.rootViewController;
+    while (topVC.presentedViewController) topVC = topVC.presentedViewController;
+    [topVC presentViewController:alert animated:YES completion:nil];
+}
+@end
+
 %hook UIViewController
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     if ([NSStringFromClass([self class]) containsString:@"ChatController"]) {
-        for (UIView *v in self.view.subviews) { if (v.tag == 33333) return; }
+        for (UIView *v in self.view.subviews) { if (v.tag == 11111) return; }
         
         UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
-        btn.tag = 33333;
-        btn.frame = CGRectMake(20, 100, 60, 60);
+        btn.tag = 11111;
+        btn.frame = CGRectMake(20, 200, 60, 60);
         btn.backgroundColor = [UIColor systemGreenColor];
         btn.layer.cornerRadius = 30;
-        [btn setTitle:@"安全抓包" forState:UIControlStateNormal];
-        [btn addTarget:self action:@selector(showTip) forControlEvents:UIControlEventTouchUpInside];
+        [btn setTitle:@"日志" forState:UIControlStateNormal];
+        [btn addTarget:[BlockHandler shared] action:@selector(showLog:) forControlEvents:UIControlEventTouchUpInside];
         [self.view addSubview:btn];
     }
-}
-- (void)showTip {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"安全抓包运行中" message:@"请去沙盒 Documents/Turrit_Safe.txt 查看结果。" preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
-    [self presentViewController:alert animated:YES completion:nil];
 }
 %end
