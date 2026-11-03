@@ -14,7 +14,6 @@
 @end
 
 @interface TGImageInfo : NSObject
-// 直接使用 UIKit 自带的 CGSize
 - (id)closestImageUrlWithSize:(CGSize)a0 resultingSize:(CGSize *)a1;
 @end
 
@@ -22,7 +21,6 @@
 + (void)presentForKey:(id)a0 mediaReplaced:(BOOL)a1 from:(id)a2;
 @end
 
-// 全局字典：存放被拦截的旧图 (Key: 消息ID字符串, Value: 媒体数组)
 static NSMutableDictionary *savedOldMediaDict = nil;
 
 // ==========================================
@@ -50,6 +48,26 @@ static NSMutableDictionary *savedOldMediaDict = nil;
     [self dismissViewControllerAnimated:YES completion:nil];
 }
 @end
+
+// ==========================================
+// 辅助函数：获取当前最顶层的 ViewController
+// ==========================================
+static UIViewController* topViewController() {
+    UIWindow *keyWindow = nil;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    keyWindow = [UIApplication sharedApplication].keyWindow;
+    if (!keyWindow) {
+        keyWindow = [UIApplication sharedApplication].windows.firstObject;
+    }
+#pragma clang diagnostic pop
+
+    UIViewController *rootVC = keyWindow.rootViewController;
+    while (rootVC.presentedViewController) {
+        rootVC = rootVC.presentedViewController;
+    }
+    return rootVC;
+}
 
 // ==========================================
 // 1. 拦截消息本身，保存旧图
@@ -80,23 +98,6 @@ static NSMutableDictionary *savedOldMediaDict = nil;
 
 %end
 
-// 辅助函数：获取当前最顶层的 ViewController (解决 keyWindow 弃用警告)
-static UIViewController* topViewController() {
-    UIWindow *keyWindow = nil;
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    keyWindow = [UIApplication sharedApplication].keyWindow;
-#pragma clang diagnostic pop
-    if (!keyWindow) {
-        keyWindow = [UIApplication sharedApplication].windows.firstObject;
-    }
-    UIViewController *rootVC = keyWindow.rootViewController;
-    while (rootVC.presentedViewController) {
-        rootVC = rootVC.presentedViewController;
-    }
-    return rootVC;
-}
-
 // ==========================================
 // 2. 拦截弹窗，自己弹旧图
 // ==========================================
@@ -108,7 +109,6 @@ static UIViewController* topViewController() {
         
         NSArray *oldMediaArray = nil;
         if (savedOldMediaDict && savedOldMediaDict.count > 0) {
-            // 取最后一次保存的图
             oldMediaArray = [[savedOldMediaDict allValues] lastObject]; 
         }
         
@@ -132,7 +132,7 @@ static UIViewController* topViewController() {
                                 vc.modalPresentationStyle = UIModalPresentationFullScreen;
                                 [topViewController() presentViewController:vc animated:YES completion:nil];
                             });
-                            return; // 成功弹出图片，结束执行
+                            return; // 成功弹出图片
                         }
                     }
                 }
