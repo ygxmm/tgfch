@@ -1,9 +1,6 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
-// ==========================================
-// 声明缺失的类和方法
-// ==========================================
 @interface TGMessage : NSObject
 @property (nonatomic) int mid;
 @property (retain, nonatomic) NSArray *mediaAttachments;
@@ -23,9 +20,6 @@
 
 static NSMutableDictionary *savedOldMediaDict = nil;
 
-// ==========================================
-// 自定义全屏看图控制器
-// ==========================================
 @interface AntiEditImageViewerController : UIViewController
 @property (nonatomic, strong) UIImage *image;
 @end
@@ -49,9 +43,6 @@ static NSMutableDictionary *savedOldMediaDict = nil;
 }
 @end
 
-// ==========================================
-// 辅助函数：获取当前最顶层的 ViewController
-// ==========================================
 static UIViewController* topViewController() {
     UIWindow *keyWindow = nil;
 #pragma clang diagnostic push
@@ -61,7 +52,6 @@ static UIViewController* topViewController() {
         keyWindow = [UIApplication sharedApplication].windows.firstObject;
     }
 #pragma clang diagnostic pop
-
     UIViewController *rootVC = keyWindow.rootViewController;
     while (rootVC.presentedViewController) {
         rootVC = rootVC.presentedViewController;
@@ -69,27 +59,19 @@ static UIViewController* topViewController() {
     return rootVC;
 }
 
-// ==========================================
-// 1. 拦截消息本身，保存旧图
-// ==========================================
 %hook TGMessage
 
 - (void)setMediaAttachments:(NSArray *)mediaAttachments {
     if (self.mediaAttachments != nil && self.mediaAttachments.count > 0) {
         if (mediaAttachments != nil && mediaAttachments.count > 0) {
-            
             id newMedia = [mediaAttachments firstObject];
             NSString *newClass = NSStringFromClass([newMedia class]);
-            
             if ([newClass containsString:@"Image"] || [newClass containsString:@"Video"]) {
-                NSLog(@"[TurritAntiEdit] 🛑 拦截媒体修改！保存旧图用于查看。");
-                
                 if (!savedOldMediaDict) {
                     savedOldMediaDict = [NSMutableDictionary dictionary];
                 }
                 savedOldMediaDict[[NSString stringWithFormat:@"%d", self.mid]] = self.mediaAttachments;
-                
-                return; // 拒绝更新
+                return;
             }
         }
     }
@@ -98,15 +80,10 @@ static UIViewController* topViewController() {
 
 %end
 
-// ==========================================
-// 2. 拦截弹窗，自己弹旧图
-// ==========================================
 %hook LeadEditHistoryViewController
 
 + (void)presentForKey:(id)a0 mediaReplaced:(BOOL)a1 from:(id)a2 {
     if (a1 == YES) {
-        NSLog(@"[TurritAntiEdit] 触发图片查看拦截！Key: %@", a0);
-        
         NSArray *oldMediaArray = nil;
         if (savedOldMediaDict && savedOldMediaDict.count > 0) {
             oldMediaArray = [[savedOldMediaDict allValues] lastObject]; 
@@ -121,9 +98,17 @@ static UIViewController* topViewController() {
                 if (imageInfo) {
                     NSString *url = [imageInfo closestImageUrlWithSize:CGSizeMake(1000, 1000) resultingSize:NULL];
                     if (url) {
-                        NSLog(@"[TurritAntiEdit] 找到旧图路径: %@", url);
-                        NSString *path = [url stringByReplacingOccurrencesOfString:@"file://" withString:@""];
-                        UIImage *oldImage = [UIImage imageWithContentsOfFile:path];
+                        UIImage *oldImage = nil;
+                        
+                        if ([url hasPrefix:@"file://"]) {
+                            NSString *path = [url stringByReplacingOccurrencesOfString:@"file://" withString:@""];
+                            oldImage = [UIImage imageWithContentsOfFile:path];
+                        } else if ([url hasPrefix:@"http"]) {
+                            NSData *data = [NSData dataWithContentsOfURL:[NSURL URLWithString:url]];
+                            if (data) {
+                                oldImage = [UIImage imageWithData:data];
+                            }
+                        }
                         
                         if (oldImage) {
                             dispatch_async(dispatch_get_main_queue(), ^{
@@ -132,16 +117,15 @@ static UIViewController* topViewController() {
                                 vc.modalPresentationStyle = UIModalPresentationFullScreen;
                                 [topViewController() presentViewController:vc animated:YES completion:nil];
                             });
-                            return; // 成功弹出图片
+                            return;
                         }
                     }
                 }
             }
         }
         
-        // 降级方案
         dispatch_async(dispatch_get_main_queue(), ^{
-            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"防编辑提示" message:@"旧图片已成功保留在聊天界面。\n(未找到本地缓存原图文件，可能已被系统清理)" preferredStyle:UIAlertControllerStyleAlert];
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"防编辑提示" message:@"对方试图修改图片，已被拦截。但旧图片已不在本地缓存中。" preferredStyle:UIAlertControllerStyleAlert];
             [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
             [topViewController() presentViewController:alert animated:YES completion:nil];
         });
